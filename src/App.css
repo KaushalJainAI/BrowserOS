@@ -1,0 +1,205 @@
+.os-container {
+  width: 100vw;
+  height: 100vh;
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  background-color: transparent;
+}
+
+
+
+
+
+.window-header {
+  height: 38px;
+  background: var(--window-header);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 var(--spacing-sm) 0 var(--spacing-md);
+  cursor: default;
+  -webkit-app-region: drag;
+  user-select: none;
+  border-bottom: 1px solid rgba(0,0,0,0.5);
+}
+
+.window-title {
+  display: flex;
+  align-items: center;
+  flex: 1;
+  justify-content: center;
+  font-size: 0.95rem;
+  font-weight: 500;
+  color: white;
+}
+
+.window-controls {
+  display: flex;
+  gap: var(--spacing-sm);
+  align-items: center;
+}
+
+.window-controls button {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: none;
+  background: transparent;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: rgba(255,255,255,0.7);
+  background: rgba(255,255,255,0.1);
+}
+
+.window-controls button:hover {
+  background: rgba(255,255,255,0.2);
+  color: white;
+}
+
+.window-controls .close-btn {
+  background: #ef4444;
+  color: white;
+}
+
+.window-controls .close-btn:hover {
+  background: #dc2626;
+}
+
+.window-content {
+  flex: 1;
+  overflow: auto;
+  position: relative;
+  color: var(--text-primary-dark);
+}
+
+/* Custom UI Components inside Windows */
+.app-container {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  box-sizing: border-box;
+}
+
+.setting-group {
+  display: flex;
+  flex-direction: column;
+}
+
+.form-input {
+  background: rgba(255,255,255,0.05);
+  border: 1px solid rgba(255,255,255,0.1);
+  color: white;
+  padding: 10px var(--spacing-md);
+  border-radius: 6px;
+  outline: none;
+  transition: border-color 0.2s;
+}
+.form-input:focus {
+  border-color: var(--os-accent);
+}
+
+.flex-row {
+  display: flex;
+  flex-direction: row;
+}
+
+.sidebar {
+  width: 220px;
+  background: #2b2b2b;
+  border-right: 1px solid rgba(0,0,0,0.5);
+}
+
+.sidebar-item:hover {
+  background: rgba(255,255,255,0.05);
+}
+
+.sidebar-item.active {
+  background: var(--os-accent);
+  color: white;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+}
+
+.file {
+  height: 110px;
+  word-break: break-all;
+  cursor: pointer;
+  border-radius: var(--spacing-sm);
+}
+
+.file:hover {
+  background: rgba(255,255,255,0.1);
+}
+
+.terminal-bg {
+  background-color: #300a24;
+}
+
+.terminal-cursor {
+  display: inline-block;
+  width: 8px;
+  height: 14px;
+  background-color: white;
+  animation: blink 1s step-end infinite;
+}
+
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+
+/* BUDDY PANEL */
+.buddy-panel {
+  width: 320px;
+  background: #09090b; /* bg-background / bg-card default dark mode */
+  border-left: 1px solid rgba(255,255,255,0.1);
+  box-shadow: -10px 0 30px rgba(0,0,0,0.5);
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  overflow: hidden;
+  height: 100%;
+}
+
+/* BUDDY TOGGLE BUTTON */
+.buddy-toggle-btn {
+  position: fixed;
+  bottom: 20px;
+  right: 20px;
+  width: 48px;
+  height: 48px;
+  background: var(--os-accent);
+  color: white;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+  z-index: 10000;
+  transition: transform 0.2s, background-color 0.2s;
+}
+
+.buddy-toggle-btn:hover {
+  transform: scale(1.1);
+  background-color: var(--os-accent-hover);
+}
+
+.buddy-toggle-btn:active {
+  transform: scale(0.95);
+}
+
+.window-maximized {
+  transform: none !important;
+  border-radius: 0 !important;
+  border: none !important;
+  box-shadow: none !important;
+  width: 100% !important;
+  height: 100% !important;
+}
