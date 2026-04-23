@@ -15,10 +15,12 @@ import {
   Zap,
   Plus,
   Copy,
-  Check
+  Check,
+  Monitor
 } from 'lucide-react';
 import { useOS } from '../../contexts/OSContext';
 import { apiClient } from '../../api/client';
+import { useBuddy } from '../../hooks/useBuddy';
 
 interface Message {
   role: 'user' | 'assistant';
@@ -47,6 +49,9 @@ const examplePrompts = [
 
 export function BuddyPanel() {
   const { isBuddyOpen, toggleBuddy, applyBuddyAction } = useOS();
+  const [screenContextEnabled, setScreenContextEnabled] = useState(true);
+  const { isConnected: buddyConnected, buddyAction } = useBuddy(screenContextEnabled);
+  
   const [messages, setMessages] = useState<Message[]>([
     {
       role: 'assistant',
@@ -199,6 +204,23 @@ export function BuddyPanel() {
         
         <div className="flex items-center gap-1">
           <button 
+            onClick={() => setScreenContextEnabled(!screenContextEnabled)}
+            className={`p-2 rounded-md transition-all flex items-center gap-2 text-[10px] font-bold uppercase tracking-wider px-3 relative ${
+              screenContextEnabled 
+                ? "bg-blue-500/10 text-blue-500 border border-blue-500/20" 
+                : "bg-white/5 text-white/30 border border-transparent hover:border-white/10"
+            }`}
+            title={screenContextEnabled ? "Disable Screen Context" : "Enable Screen Context"}
+          >
+            <Monitor className="w-3.5 h-3.5" />
+            {screenContextEnabled ? 'Context ON' : 'Context OFF'}
+            {screenContextEnabled && (
+              <span className={`absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full border border-[#09090b] ${
+                buddyConnected ? "bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.6)]" : "bg-yellow-500 animate-pulse"
+              }`} />
+            )}
+          </button>
+          <button 
             onClick={() => setMessages([messages[0]])}
             className="p-2 text-white/50 hover:text-red-400 hover:bg-white/5 rounded-md transition-colors"
             title="Clear Chat"
@@ -298,6 +320,12 @@ export function BuddyPanel() {
       )}
 
       {/* Input Area */}
+      {buddyAction && (
+        <div className="px-4 py-2 bg-blue-500/10 border-t border-blue-500/20 text-blue-500 text-xs flex items-center justify-center gap-2 font-medium">
+          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+          Buddy: {buddyAction}
+        </div>
+      )}
       <div className="p-4 border-t border-white/10 bg-[#09090b] relative z-20 flex flex-col gap-3">
         {/* Chat Input */}
         <div className="max-w-3xl mx-auto flex flex-col w-full">
