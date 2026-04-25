@@ -86,38 +86,63 @@ export function useBuddy(enabled: boolean = true) {
   }, []);
 
   useEffect(() => {
+    let isManualClose = false;
+    let reconnectTimeout: ReturnType<typeof setTimeout>;
+
     if (!enabled) {
-      if (wsRef.current) {
-        wsRef.current.close();
-      }
       setIsConnected(false);
       return;
     }
 
     const connect = () => {
+      if (wsRef.current && (wsRef.current.readyState === WebSocket.OPEN || wsRef.current.readyState === WebSocket.CONNECTING)) {
+        return;
+      }
+
       const token = window.localStorage.getItem('authToken');
-      const wsUrl = `ws://${window.location.host.split(':')[0]}:8000/ws/buddy/?token=${token}`;
+      if (!token) {
+        console.warn('Buddy: No auth token found');
+        return;
+      }
+
+      // Build robust URL
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const host = window.location.hostname;
+      // In development, the backend is typically on 8000. 
+      // In production, it might be the same host or a different domain.
+      const port = window.location.port === '5173' || window.location.port === '3000' ? '8000' : window.location.port;
+      const wsUrl = `${protocol}//${host}${port ? `:${port}` : ''}/ws/buddy/?token=${token}`;
+
+      console.log(`Buddy: Connecting to ${wsUrl}`);
       const ws = new WebSocket(wsUrl);
 
       ws.onopen = () => {
-        console.log('Buddy WS connected');
+        console.log('Buddy: WebSocket connected');
         setIsConnected(true);
-        // Initial context sync
         sendContextUpdate();
       };
 
       ws.onmessage = (event) => {
-        const data = JSON.parse(event.data);
-        if (data.type === 'trigger_action') {
-          executeAction(data.action, data.parameters);
+        try {
+          const data = JSON.parse(event.data);
+          if (data.type === 'trigger_action') {
+            executeAction(data.action, data.parameters);
+          }
+        } catch (err) {
+          console.error('Buddy: Failed to parse WS message', err);
         }
       };
 
-      ws.onclose = () => {
-        console.log('Buddy WS disconnected');
-        setIsConnected(false);
-        // Reconnect after 3s
-        setTimeout(connect, 3000);
+      ws.onclose = (event) => {
+        if (!isManualClose) {
+          console.log(`Buddy: WebSocket disconnected (Code: ${event.code}). Reconnecting...`);
+          setIsConnected(false);
+          reconnectTimeout = setTimeout(connect, 3000);
+        }
+      };
+
+      ws.onerror = (err) => {
+        console.error('Buddy: WebSocket error', err);
       };
 
       wsRef.current = ws;
@@ -126,8 +151,11 @@ export function useBuddy(enabled: boolean = true) {
     connect();
 
     return () => {
+      isManualClose = true;
+      clearTimeout(reconnectTimeout);
       if (wsRef.current) {
         wsRef.current.close();
+        wsRef.current = null;
       }
     };
   }, [enabled, executeAction, sendContextUpdate]);
