@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "build:deployment": "tsc -b && vite build --mode deployment",
     "lint": "eslint .",
     "preview": "vite preview"
   },
@@ -13,7 +14,9 @@
     "lucide-react": "^0.575.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
-    "react-draggable": "^4.5.0"
+    "react-draggable": "^4.5.0",
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.1",

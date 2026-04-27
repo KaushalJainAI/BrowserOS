@@ -2,25 +2,26 @@ import { useState, useRef, useEffect } from 'react';
 import { 
   Bot, 
   User, 
-  Sparkles, 
-  Loader2,
-  Trash2,
   X,
   PlusCircle,
-  Image as ImageIcon,
   History,
   ArrowRight,
   ChevronDown,
-  MessageSquare,
-  Zap,
   Plus,
   Copy,
   Check,
-  Monitor
+  Monitor,
+  FileCode,
+  Mic,
+  Command,
+  Sparkles
 } from 'lucide-react';
 import { useOS } from '../../contexts/OSContext';
 import { apiClient } from '../../api/client';
 import { useBuddy } from '../../hooks/useBuddy';
+import { useAIModels } from '../../hooks/useAIModels';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 
 interface Message {
   role: 'user' | 'assistant';
@@ -41,16 +42,12 @@ interface BuddyCommandResponse {
   supported_examples?: string[];
 }
 
-const examplePrompts = [
-  { icon: MessageSquare, text: "Explain how BrowserOS connects to n8n" },
-  { icon: Zap, text: "Automate my daily research workflow" },
-  { icon: ImageIcon, text: "Generate a new desktop background" },
-];
+
 
 export function BuddyPanel() {
   const { isBuddyOpen, toggleBuddy, applyBuddyAction } = useOS();
   const [screenContextEnabled, setScreenContextEnabled] = useState(true);
-  const { isConnected: buddyConnected, buddyAction } = useBuddy(screenContextEnabled);
+  const { buddyAction } = useBuddy(screenContextEnabled);
   
   const [messages, setMessages] = useState<Message[]>([
     {
@@ -64,45 +61,21 @@ export function BuddyPanel() {
   const [showHistory, setShowHistory] = useState(false);
   const [isModelOpen, setIsModelOpen] = useState(false);
   const [copiedId, setCopiedId] = useState<number | null>(null);
+  const [thinkingTime, setThinkingTime] = useState(0);
+  const [thinkingStatus, setThinkingStatus] = useState('Buddy is thinking...');
 
-  const [llmProvider, setLlmProvider] = useState('google');
-  const [llmModel, setLlmModel] = useState('gemini-2.0-flash');
-  const [modelSearchQuery, setModelSearchQuery] = useState('');
+  const [llmProvider, setLlmProvider] = useState('');
+  const [llmModel, setLlmModel] = useState('');
 
-  const dynamicProviders = [
-    {
-      name: 'Google',
-      slug: 'google',
-      icon: '🌐',
-      has_credentials: true,
-      models: [
-        { name: 'Gemini 1.5 Pro', value: 'gemini-1-5-pro', is_free: false },
-        { name: 'Gemini 1.5 Flash', value: 'gemini-1-5-flash', is_free: true },
-        { name: 'Gemini 2.0 Flash', value: 'gemini-2.0-flash', is_free: true },
-      ]
-    },
-    {
-      name: 'OpenAI',
-      slug: 'openai',
-      icon: '🧠',
-      has_credentials: true,
-      models: [
-        { name: 'GPT-4o Mini', value: 'gpt-4o-mini', is_free: true },
-        { name: 'GPT-4o', value: 'gpt-4o', is_free: false },
-        { name: 'o1-mini', value: 'o1-mini', is_free: false },
-      ]
-    },
-    {
-      name: 'Anthropic',
-      slug: 'anthropic',
-      icon: '🤖',
-      has_credentials: true,
-      models: [
-        { name: 'Claude 3.5 Sonnet', value: 'claude-3-5-sonnet', is_free: false },
-        { name: 'Claude 3 Haiku', value: 'claude-3-haiku', is_free: true },
-      ]
-    }
-  ];
+  const { providers: dynamicProviders } = useAIModels();
+
+  // Pick the first provider with credentials as default once providers load.
+  useEffect(() => {
+    if (!dynamicProviders.length || llmProvider) return;
+    const first = dynamicProviders.find(p => p.has_credentials) ?? dynamicProviders[0];
+    setLlmProvider(first.slug);
+    setLlmModel(first.models[0]?.value ?? '');
+  }, [dynamicProviders, llmProvider]);
   
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -128,6 +101,41 @@ export function BuddyPanel() {
     el.style.height = "auto";
     el.style.height = Math.min(el.scrollHeight, 120) + "px";
   }, [input]);
+
+  // Thinking Timer & Status cycling
+  useEffect(() => {
+    let timer: any;
+    let statusInterval: any;
+    
+    if (isLoading) {
+      setThinkingTime(0);
+      setThinkingStatus('Buddy is thinking...');
+      
+      timer = setInterval(() => {
+        setThinkingTime(prev => prev + 0.1);
+      }, 100);
+
+      const statuses = [
+        'Analyzing your request...',
+        'Scanning screen context...',
+        'Orchestrating workflow...',
+        'Searching for tools...',
+        'Formulating response...'
+      ];
+      let statusIdx = 0;
+      statusInterval = setInterval(() => {
+        statusIdx++;
+        setThinkingStatus(statuses[statusIdx % statuses.length]);
+      }, 2500);
+    } else {
+      setThinkingTime(0);
+    }
+
+    return () => {
+      clearInterval(timer);
+      clearInterval(statusInterval);
+    };
+  }, [isLoading]);
 
   if (!isBuddyOpen) return null;
 
@@ -182,112 +190,114 @@ export function BuddyPanel() {
   };
 
   return (
-    <div className="buddy-panel h-full flex flex-col relative font-sans text-white bg-[#09090b]">
+    <div className="buddy-panel h-full flex flex-col relative font-sans text-white bg-[#0a0a0c]">
 
-      {/* Header */}
-      <div className="h-14 border-b border-white/10 bg-[#09090b] flex items-center justify-between px-4 shrink-0 relative z-30">
+      {/* Header - Claude Style */}
+      <div className="h-14 glass-morphism flex items-center justify-between px-6 shrink-0 relative z-30 border-b border-white/5">
         <div className="flex items-center gap-3">
-          <button 
-            onClick={() => setShowHistory(!showHistory)}
-            className={`p-2 rounded-md transition-colors ${showHistory ? 'bg-white/10 text-white' : 'hover:bg-white/5 text-white/50'}`}
-            title="History"
-          >
-            <History className="w-5 h-5" />
-          </button>
-          <div className="flex items-center gap-2">
-            <Sparkles className="w-4 h-4 text-blue-500" />
-            <span className="text-sm font-bold tracking-tight text-white/90">
-              AI Assistant
-            </span>
-          </div>
+           <div className="p-1.5 rounded-lg bg-indigo-500/10 text-indigo-400">
+             <Bot className="w-4 h-4" />
+           </div>
+           <span className="text-sm font-bold text-white/90 truncate max-w-[200px]">
+             {messages.length > 1 ? "Optimizing Buddy Environment" : "New Session"}
+           </span>
         </div>
         
         <div className="flex items-center gap-1">
           <button 
             onClick={() => setScreenContextEnabled(!screenContextEnabled)}
-            className={`p-2 rounded-md transition-all flex items-center gap-2 text-[10px] font-bold uppercase tracking-wider px-3 relative ${
+            className={`p-2 rounded-lg transition-all ${
               screenContextEnabled 
-                ? "bg-blue-500/10 text-blue-500 border border-blue-500/20" 
-                : "bg-white/5 text-white/30 border border-transparent hover:border-white/10"
+                ? 'text-indigo-400 bg-indigo-500/10' 
+                : 'text-white/30 hover:text-white hover:bg-white/5'
             }`}
-            title={screenContextEnabled ? "Disable Screen Context" : "Enable Screen Context"}
+            title={screenContextEnabled ? 'Screen Context: On' : 'Screen Context: Off'}
           >
-            <Monitor className="w-3.5 h-3.5" />
-            {screenContextEnabled ? 'Context ON' : 'Context OFF'}
-            {screenContextEnabled && (
-              <span className={`absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full border border-[#09090b] ${
-                buddyConnected ? "bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.6)]" : "bg-yellow-500 animate-pulse"
-              }`} />
-            )}
+            <Monitor className="w-4 h-4" />
+          </button>
+          <button 
+            onClick={() => setShowHistory(!showHistory)}
+            className="p-2 text-white/30 hover:text-white hover:bg-white/5 rounded-lg transition-all"
+            title="History"
+          >
+            <History className="w-4 h-4" />
           </button>
           <button 
             onClick={() => setMessages([messages[0]])}
-            className="p-2 text-white/50 hover:text-red-400 hover:bg-white/5 rounded-md transition-colors"
-            title="Clear Chat"
+            className="p-2 text-white/30 hover:text-white hover:bg-white/5 rounded-lg transition-all"
+            title="New Chat"
           >
-            <Trash2 className="w-4 h-4" />
+            <Plus className="w-4 h-4" />
           </button>
-          <button onClick={toggleBuddy} className="p-2 hover:bg-white/5 rounded-md text-white/50 transition-colors">
+          <div className="w-px h-4 bg-white/10 mx-2" />
+          <button onClick={toggleBuddy} className="p-2 hover:bg-white/5 rounded-lg text-white/30 transition-all">
             <X className="w-5 h-5" />
           </button>
         </div>
       </div>
 
       {/* Messages Area */}
-      <div className="flex-1 overflow-y-auto p-4 z-10 custom-scrollbar">
-        <div className="max-w-3xl mx-auto space-y-6">
+      <div className="flex-1 overflow-y-auto p-6 z-10 custom-scrollbar bg-[#0a0a0c]">
+        <div className="max-w-3xl mx-auto space-y-8">
           {messages.map((message, index) => (
             <div
               key={index}
-              className={`flex gap-4 ${message.role === 'user' ? 'justify-end' : ''}`}
+              className={`flex gap-5 animate-in fade-in slide-in-from-bottom-2 duration-300`}
             >
-              {message.role === 'assistant' && (
-                <div className="w-8 h-8 rounded-full bg-blue-500/10 flex items-center justify-center shrink-0">
-                  <Bot className="w-4 h-4 text-blue-500" />
-                </div>
-              )}
+              <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 border border-white/5 ${
+                message.role === 'assistant' 
+                  ? 'bg-indigo-500/10 text-indigo-400' 
+                  : 'bg-white/5 text-white/40'
+              }`}>
+                {message.role === 'assistant' ? <Bot className="w-4 h-4" /> : <User className="w-4 h-4" />}
+              </div>
               
-              <div className={`max-w-[85%] ${message.role === 'user' ? 'order-1' : ''}`}>
-                <div
-                  className={`p-4 rounded-2xl ${
-                    message.role === 'user'
-                      ? 'bg-blue-600 text-white rounded-tr-sm'
-                      : 'bg-[#27272a] text-white/90 rounded-tl-sm'
-                  }`}
-                >
-                  <div className="whitespace-pre-wrap text-[14px] leading-relaxed">{message.content}</div>
-                </div>
-                
-                {/* Actions */}
-                <div className={`flex items-center gap-2 mt-2 ${message.role === 'user' ? 'justify-end' : ''}`}>
-                  <button
-                    onClick={() => copyToClipboard(message.content, index)}
-                    className="p-1 hover:bg-white/10 rounded text-white/40 hover:text-white/80 transition-colors"
-                    title="Copy message"
-                  >
-                    {copiedId === index ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
-                  </button>
-                  <span className="text-xs text-white/40">
+              <div className="flex-1 flex flex-col min-w-0">
+                <div className="flex items-center gap-2 mb-1.5">
+                  <span className="text-[11px] font-black uppercase tracking-widest text-white/30">
+                    {message.role === 'assistant' ? 'Buddy' : 'You'}
+                  </span>
+                  <span className="text-[10px] text-white/10 font-medium tracking-tight">
                     {message.time}
                   </span>
                 </div>
-              </div>
-
-              {message.role === 'user' && (
-                <div className="w-8 h-8 rounded-full bg-[#27272a] flex items-center justify-center shrink-0 border border-white/5 text-white/70">
-                  <User className="w-4 h-4" />
+                
+                <div className="text-[14px] leading-relaxed text-white/80 font-normal prose-buddy">
+                  <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                    {message.content}
+                  </ReactMarkdown>
                 </div>
-              )}
+                
+                {/* Actions */}
+                <div className="flex items-center gap-3 mt-3">
+                  <button
+                    onClick={() => copyToClipboard(message.content, index)}
+                    className="p-1.5 hover:bg-white/5 rounded text-white/20 hover:text-white/60 transition-colors"
+                  >
+                    {copiedId === index ? <Check className="w-3.5 h-3.5 text-green-500" /> : <Copy className="w-3.5 h-3.5" />}
+                  </button>
+                </div>
+              </div>
             </div>
           ))}
 
           {isLoading && (
-            <div className="flex gap-4">
-              <div className="w-8 h-8 rounded-full bg-blue-500/10 flex items-center justify-center">
-                <Bot className="w-4 h-4 text-blue-500" />
+            <div className="flex gap-5 animate-in fade-in duration-300">
+              <div className="w-8 h-8 rounded-full bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center shrink-0">
+                <Sparkles className="w-4 h-4 text-indigo-400 animate-pulse" />
               </div>
-              <div className="p-4 bg-[#27272a] rounded-2xl rounded-tl-sm">
-                <Loader2 className="w-5 h-5 animate-spin text-white/50" />
+              <div className="flex flex-col gap-2 pt-1.5 flex-1 min-w-0">
+                 <div className="flex items-center justify-between gap-2">
+                   <span className="text-[10px] font-black uppercase tracking-widest text-white/40 truncate">
+                     {buddyAction || thinkingStatus}
+                   </span>
+                   <span className="text-[10px] font-mono text-white/20 shrink-0">
+                     ({thinkingTime.toFixed(1)}s)
+                   </span>
+                 </div>
+                 <div className="w-48 h-0.5 bg-white/5 rounded-full overflow-hidden">
+                    <div className="h-full bg-indigo-500/40 rounded-full animate-indeterminate-slide" />
+                 </div>
               </div>
             </div>
           )}
@@ -296,192 +306,114 @@ export function BuddyPanel() {
         </div>
       </div>
 
-      {/* Empty State / Examples */}
-      {messages.length === 1 && (
-        <div className="px-4 pb-2 z-10 animate-in fade-in slide-in-from-bottom-4">
-          <div className="max-w-3xl mx-auto">
-            <p className="text-sm text-white/50 mb-2 font-medium">Try these examples:</p>
-            <div className="flex flex-col gap-2">
-              {examplePrompts.map((prompt, i) => (
-                <button
-                  key={i}
-                  onClick={() => setInput(prompt.text)}
-                  className="w-full p-3 bg-[#18181b] hover:bg-[#27272a] border border-white/5 hover:border-blue-500/20 rounded-xl text-sm transition-all text-left shadow-sm group relative overflow-hidden"
-                >
-                   <div className="absolute inset-0 bg-gradient-to-r from-transparent via-blue-500/5 to-transparent translate-x-[-100%] group-hover:translate-x-[100%] transition-transform duration-1000" />
-                   <span className="relative z-10 text-white/80 group-hover:text-white">
-                     {prompt.text}
-                   </span>
-                </button>
-              ))}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Input Area */}
-      {buddyAction && (
-        <div className="px-4 py-2 bg-blue-500/10 border-t border-blue-500/20 text-blue-500 text-xs flex items-center justify-center gap-2 font-medium">
-          <Loader2 className="w-3.5 h-3.5 animate-spin" />
-          Buddy: {buddyAction}
-        </div>
-      )}
-      <div className="p-4 border-t border-white/10 bg-[#09090b] relative z-20 flex flex-col gap-3">
-        {/* Chat Input */}
-        <div className="max-w-3xl mx-auto flex flex-col w-full">
-          <div className="flex items-end gap-2">
-            <div className="flex-1 relative bg-[#09090b] border border-white/20 rounded-3xl focus-within:ring-2 focus-within:ring-white/20 transition-all shadow-sm flex items-end gap-2 p-2">
-              
-              {/* Media Button */}
-              <div className="relative flex items-center justify-center w-10 h-10 rounded-xl shrink-0">
-                <button className="w-10 h-10 rounded-full flex items-center justify-center text-white/40 hover:text-white hover:bg-white/10 transition-all">
-                  <PlusCircle className="w-6 h-6" />
-                </button>
-              </div>
-              
+      {/* Input Area - Claude Style Action Bar */}
+      <div className="p-6 bg-[#0a0a0c] border-t border-white/5 relative z-20">
+        <div className="max-w-3xl mx-auto w-full">
+          <div className="relative flex flex-col bg-white/[0.03] border border-white/10 rounded-2xl focus-within:border-indigo-500/40 focus-within:bg-white/[0.05] transition-all duration-300 backdrop-blur-xl group shadow-2xl">
+            
+            {/* Textarea */}
+            <div className="px-4 pt-4 pb-2">
               <textarea
                 ref={textareaRef}
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={handleKey}
                 placeholder="Ask me anything..."
-                className="w-full bg-transparent border-none focus:outline-none resize-none max-h-[160px] overflow-y-auto text-sm leading-relaxed py-2.5 scrollbar-none text-white placeholder-white/40"
+                className="w-full bg-transparent border-none focus:outline-none resize-none max-h-[200px] overflow-y-auto text-sm leading-relaxed text-white placeholder-white/20"
                 rows={1}
               />
-              
-              {/* Send Button */}
-              <div className="shrink-0 pb-1 pr-1">
+              <div className="text-[10px] text-white/10 font-medium flex items-center gap-1.5 mt-1 pointer-events-none select-none">
+                <Command className="w-2.5 h-2.5" />
+                <span>esc to focus or unfocus Buddy</span>
+              </div>
+            </div>
+
+            {/* Action Bar */}
+            <div className="h-12 px-2 flex items-center justify-between border-t border-white/5 mt-2 bg-white/[0.02] rounded-b-2xl">
+              <div className="flex items-center gap-1">
+                <button className="action-bar-icon" title="Add Content">
+                  <PlusCircle className="w-4.5 h-4.5" />
+                </button>
+                <div className="w-px h-4 bg-white/10 mx-1" />
+                <div className="flex items-center gap-2 px-2 py-1.5 rounded-lg bg-white/5 border border-white/5">
+                   <FileCode className="w-3.5 h-3.5 text-white/40" />
+                   <span className="text-[10px] font-bold text-white/60 tracking-tight">BuddyPanel.tsx</span>
+                </div>
+                <button className="action-bar-icon" title="Voice Input">
+                  <Mic className="w-4.5 h-4.5" />
+                </button>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <button 
+                  onClick={() => setIsModelOpen(!isModelOpen)}
+                  className="px-3 py-1.5 rounded-lg bg-white/5 hover:bg-white/10 border border-white/5 flex items-center gap-2 transition-all"
+                >
+                   <span className="text-[9px] font-bold text-white/40 uppercase tracking-tighter">
+                     {llmModel.split('-')[0]}
+                   </span>
+                   <ChevronDown className="w-3 h-3 text-white/20" />
+                </button>
                 <button 
                   onClick={handleSend}
                   disabled={!input.trim() || isLoading}
-                  className={`w-8 h-8 rounded-full shadow-lg transition-all flex items-center justify-center ${
+                  className={`w-8 h-8 rounded-lg transition-all flex items-center justify-center shrink-0 ${
                     input.trim() 
-                      ? 'bg-blue-500 text-white hover:bg-blue-600 active:scale-95 shadow-blue-500/20' 
-                      : 'bg-white/5 text-white/30 cursor-not-allowed'
+                      ? 'premium-gradient text-white shadow-lg active:scale-95' 
+                      : 'bg-white/5 text-white/10 cursor-not-allowed'
                   }`}
                 >
-                  <ArrowRight className="w-4 h-4" />
+                  <ArrowRight className="w-4.5 h-4.5 -rotate-90" />
                 </button>
               </div>
             </div>
           </div>
         </div>
+      </div>
 
-        {/* Model Selection Bar - Now Naturally Flowing Below the Input */}
-        <div className="w-full flex items-center justify-start z-[60]">
-          <div className="relative inline-block">
-            <button 
-              onClick={() => setIsModelOpen(!isModelOpen)}
-              className="flex items-center gap-2 px-3 py-1.5 bg-[#18181b] border border-white/10 hover:bg-[#27272a] rounded-full shadow-sm transition-all active:scale-95 group"
-            >
-              <div className="flex items-center gap-2 overflow-hidden">
-                <div className="flex items-center justify-center w-6 h-6 rounded-full bg-blue-500/10 text-blue-500 shrink-0">
-                  <span className="text-xs font-bold leading-none">
-                    {dynamicProviders.find(p => p.slug === llmProvider)?.icon || '🌐'}
-                  </span>
-                </div>
-                <div className="flex flex-col items-start leading-[1.1] min-w-[80px]">
-                  <span className="text-[8px] font-bold uppercase text-white/50 tracking-wider">Model</span>
-                  <span className="text-xs font-bold text-white truncate max-w-[100px]">
-                    {dynamicProviders.find(p => p.slug === llmProvider)?.models.find(m => m.value === llmModel)?.name || llmModel}
-                  </span>
+      {/* Model Selection Dropdown Overlay */}
+      {isModelOpen && (
+        <div className="fixed inset-0 z-[100] flex items-end justify-center pb-24 px-6 pointer-events-none">
+          <div className="fixed inset-0 bg-black/40 backdrop-blur-sm pointer-events-auto" onClick={() => setIsModelOpen(false)} />
+          <div className="w-[320px] glass-morphism rounded-2xl shadow-2xl p-4 animate-in slide-in-from-bottom-4 duration-300 pointer-events-auto border border-white/10">
+            <div className="space-y-4">
+              <div className="flex flex-col gap-3">
+                <label className="text-[9px] font-black uppercase tracking-widest text-white/20 px-1">Engine Provider</label>
+                <div className="flex gap-2">
+                   {dynamicProviders.map(p => (
+                     <button
+                        key={p.slug}
+                        onClick={() => setLlmProvider(p.slug)}
+                        className={`flex-1 p-2 rounded-xl border transition-all flex flex-col items-center gap-1 ${
+                          llmProvider === p.slug ? 'bg-indigo-500/10 border-indigo-400 text-indigo-400' : 'border-white/5 text-white/30'
+                        }`}
+                     >
+                       <span className="text-lg">{p.icon}</span>
+                       <span className="text-[8px] font-bold uppercase tracking-tighter">{p.name}</span>
+                     </button>
+                   ))}
                 </div>
               </div>
-              <ChevronDown className={`w-3.5 h-3.5 text-white/40 transition-transform duration-300 shrink-0 ${isModelOpen ? 'rotate-180' : ''}`} />
-            </button>
-
-            {/* Dropdown Menu */}
-            {isModelOpen && (
-              <>
-                <div className="fixed inset-0 z-[55]" onClick={() => setIsModelOpen(false)} />
-                <div className="absolute bottom-[110%] left-0 w-[240px] bg-[#09090b] border border-white/10 rounded-xl shadow-2xl z-[60] p-3 animate-in slide-in-from-bottom-2 duration-200">
-                  <div className="space-y-4">
-                    <div>
-                      <label className="text-[10px] font-bold uppercase text-white/50 mb-2 block px-1">AI Provider</label>
-                      <div className="grid grid-cols-3 gap-2">
-                        {dynamicProviders.map(p => (
-                          <button
-                            key={p.slug}
-                            onClick={() => {
-                              setLlmProvider(p.slug);
-                            }}
-                            className={`p-2 rounded-xl border text-sm transition-all flex flex-col items-center gap-1.5 ${
-                              llmProvider === p.slug 
-                                ? "bg-blue-500/10 border-blue-500 text-blue-500 shadow-sm ring-1 ring-blue-500/20" 
-                                : "border-white/10 hover:border-white/30 hover:bg-white/5 text-white/70"
-                            }`}
-                          >
-                            <span className="text-xl leading-none">{p.icon}</span>
-                            <span className="text-[9px] font-bold truncate w-full text-center">{p.name}</span>
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                    <div>
-                      <label className="text-[10px] font-bold uppercase text-white/50 mb-2 block px-1">Select Model</label>
-                      <div className="px-1 mb-2">
-                        <input
-                          type="text"
-                          placeholder="Search models..."
-                          value={modelSearchQuery}
-                          onChange={(e) => setModelSearchQuery(e.target.value)}
-                          className="w-full bg-white/5 border border-white/10 px-3 py-1.5 rounded-lg text-[11px] text-white focus:ring-1 focus:ring-blue-500/20 outline-none placeholder:text-white/30"
-                          onClick={(e) => e.stopPropagation()}
-                        />
-                      </div>
-                      <div className="space-y-1 max-h-[160px] overflow-y-auto custom-scrollbar pr-1">
-                        {dynamicProviders.find(p => p.slug === llmProvider)?.models
-                          .filter(m => {
-                            const q = modelSearchQuery.toLowerCase().trim();
-                            if (!q) return true;
-                            const matchesName = m.name.toLowerCase().includes(q) || m.value.toLowerCase().includes(q);
-                            if (matchesName) return true;
-                            if (q === 'free' && m.is_free === true) return true;
-                            if (q === 'paid' && m.is_free === false) return true;
-                            return false;
-                          })
-                          .map(m => (
-                          <button
-                            key={m.value}
-                            onClick={() => {
-                              setLlmModel(m.value);
-                              setIsModelOpen(false);
-                            }}
-                            className={`w-full text-left px-3 py-2.5 rounded-xl text-xs font-medium transition-all ${
-                              llmModel === m.value 
-                                ? "bg-blue-500 text-white shadow-md shadow-blue-500/20" 
-                                : "hover:bg-white/5 text-white/70 hover:text-white"
-                            }`}
-                          >
-                            {m.name}
-                          </button>
-                        ))}
-                        {(() => {
-                          const filtered = (dynamicProviders.find(p => p.slug === llmProvider)?.models || [])
-                            .filter(m => {
-                              const q = modelSearchQuery.toLowerCase().trim();
-                              if (!q) return true;
-                              const matchesName = m.name.toLowerCase().includes(q) || m.value.toLowerCase().includes(q);
-                              if (matchesName) return true;
-                              if (q === 'free' && m.is_free === true) return true;
-                              if (q === 'paid' && m.is_free === false) return true;
-                              return false;
-                            });
-                          return filtered.length === 0 ? (
-                            <div className="px-3 py-4 text-center text-[10px] text-white/40 italic">
-                              No models found matching "{modelSearchQuery}"
-                            </div>
-                          ) : null;
-                        })()}
-                      </div>
-                    </div>
-                  </div>
+              <div className="flex flex-col gap-2">
+                <label className="text-[9px] font-black uppercase tracking-widest text-white/20 px-1">Active Model</label>
+                <div className="max-h-[160px] overflow-y-auto custom-scrollbar space-y-1">
+                  {dynamicProviders.find(p => p.slug === llmProvider)?.models.map(m => (
+                    <button
+                      key={m.value}
+                      onClick={() => { setLlmModel(m.value); setIsModelOpen(false); }}
+                      className={`w-full text-left px-3 py-2 rounded-lg text-xs font-bold transition-all ${
+                        llmModel === m.value ? 'bg-indigo-500 text-white' : 'hover:bg-white/5 text-white/40'
+                      }`}
+                    >
+                      {m.name}
+                    </button>
+                  ))}
                 </div>
-              </>
-            )}
+              </div>
+            </div>
           </div>
         </div>
-      </div>
+      )}
 
       {/* Internal History Sidebar Overlay */}
       <div className={`absolute inset-y-0 right-0 w-full bg-[#0a0a0c] border-l border-white/5 z-40 transition-all duration-500 ease-in-out transform ${
@@ -518,6 +450,14 @@ export function BuddyPanel() {
         .custom-scrollbar::-webkit-scrollbar-thumb {
           background: rgba(255, 255, 255, 0.05);
           border-radius: 10px;
+        }
+        @keyframes indeterminate-slide {
+          0% { transform: translateX(-100%); }
+          100% { transform: translateX(200%); }
+        }
+        .animate-indeterminate-slide {
+          width: 50%;
+          animation: indeterminate-slide 1.5s infinite linear;
         }
       `}</style>
     </div>
