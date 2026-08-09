@@ -1,48 +1,31 @@
-import { createContext, useContext, useState, type ReactNode } from 'react';
-
-interface User {
-  id: string;
-  name: string;
-  email: string;
-}
-
-interface AuthContextType {
-  user: User | null;
-  login: (email: string) => Promise<void>;
-  logout: () => void;
-  isLoading: boolean;
-}
-
-const AuthContext = createContext<AuthContextType | undefined>(undefined);
+import { useCallback, useMemo, useState, type ReactNode } from 'react';
+import { AuthContext, type User } from './authState';
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [user, setUser] = useState<User | null>({ id: '1', name: 'BrowserOS User', email: 'user@browseros.local' });
+  const [user, setUser] = useState<User | null>({
+    id: '1',
+    name: 'BrowserOS User',
+    email: 'user@browseros.local',
+  });
   const [isLoading, setIsLoading] = useState(false);
 
-  const login = async (email: string) => {
+  const login = useCallback(async (email: string) => {
     setIsLoading(true);
-    // Mock API call
-    setTimeout(() => {
-      setUser({ id: '1', name: 'BrowserOS User', email });
+    try {
+      // No identity endpoint is wired up yet; the desktop runs against whatever
+      // token `api/auth.ts` holds, and this only records who is signed in.
+      setUser({ id: '1', name: email.split('@')[0] || 'BrowserOS User', email });
+    } finally {
       setIsLoading(false);
-    }, 1000);
-  };
+    }
+  }, []);
 
-  const logout = () => {
-    setUser(null);
-  };
+  const logout = useCallback(() => setUser(null), []);
 
-  return (
-    <AuthContext.Provider value={{ user, login, logout, isLoading }}>
-      {children}
-    </AuthContext.Provider>
+  const value = useMemo(
+    () => ({ user, login, logout, isLoading }),
+    [user, login, logout, isLoading],
   );
-}
 
-export function useAuth() {
-  const context = useContext(AuthContext);
-  if (context === undefined) {
-    throw new Error('useAuth must be used within an AuthProvider');
-  }
-  return context;
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

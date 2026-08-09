@@ -1,11 +1,27 @@
-import { apiClient } from './client';
+import { apiClient, API_BASE_URL } from './client';
+import { authHeaders } from './auth';
 
 export interface ChatMessage {
   id: number;
   role: 'user' | 'assistant' | 'system';
   content: string;
   created_at: string;
-  metadata?: any;
+  metadata?: Record<string, unknown>;
+}
+
+/** Server-sent event frame from the chat stream. Extra keys vary by `type`. */
+export interface ChatStreamEvent {
+  type: string;
+  [key: string]: unknown;
+}
+
+/** Envelope every `/api/chat/execute-tool/` call returns. */
+export interface ToolResult {
+  status: 'success' | 'error';
+  stdout?: string;
+  stderr?: string;
+  error?: string;
+  result?: unknown;
 }
 
 export interface ChatSession {
@@ -23,7 +39,7 @@ export const chatService = {
     return response.data;
   },
 
-  async createSession(data: any): Promise<ChatSession> {
+  async createSession(data: Partial<ChatSession> & Record<string, unknown>): Promise<ChatSession> {
     const response = await apiClient.post<ChatSession>('/api/chat/sessions/', data);
     return response.data;
   },
@@ -37,23 +53,18 @@ export const chatService = {
     sessionId: string,
     content: string,
     intent: string | undefined,
-    onEvent: (event: { type: string; [key: string]: any }) => void,
+    onEvent: (event: ChatStreamEvent) => void,
     approveToolCall?: string
   ): Promise<void> {
-    const API_URL = (import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000').replace(/\/$/, '');
-    const token = window.localStorage.getItem('authToken');
-    
-    const body: Record<string, any> = { content };
+    const body: Record<string, unknown> = { content };
     if (intent && intent !== 'normal') body.intent = intent;
     if (approveToolCall) body.approve_tool_call = approveToolCall;
 
-    const response = await fetch(`${API_URL}/api/chat/sessions/${sessionId}/stream/`, {
+    const response = await fetch(`${API_BASE_URL}/api/chat/sessions/${sessionId}/stream/`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Token ${token}`
-      },
-      body: JSON.stringify(body)
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify(body),
     });
 
     if (!response.ok) throw new Error('Failed to start stream');
@@ -85,28 +96,23 @@ export const chatService = {
   }
 };
 
-export const filesService = {
-  async listFiles(path: string = '.'): Promise<any> {
-    const response = await apiClient.post<any>('/api/chat/execute-tool/', {
-      tool: 'list_files',
-      args: { path }
-    });
-    return response.data;
-  },
-  async readFile(path: string): Promise<any> {
-    const response = await apiClient.post<any>('/api/chat/execute-tool/', {
-      tool: 'read_file',
-      args: { path }
-    });
-    return response.data;
-  }
-};
-
 export const terminalService = {
-  async executeCommand(command: string): Promise<any> {
-    const response = await apiClient.post<any>('/api/chat/execute-tool/', {
-      tool: 'execute_python_code', // Reusing python executor or we could add a shell one
-      args: { code: `import os; print(os.popen("${command}").read())` }
+  /**
+   * Runs a command in the backend sandbox.
+   *
+   * The command travels as *data*. The previous version pasted it into a Python
+   * snippet (`os.popen("<command>")`), so any quote in the input broke the
+   * snippet and anything else in it executed as Python.
+   *
+   * Note: `execute_shell` is the name the backend's own tool manifest uses but
+   * is not currently registered in `chat/tools.py`, so `run` reports an error
+   * until it is wired up. It failed before this change too — it called
+   * `execute_python_code`, which is equally absent.
+   */
+  async executeCommand(command: string): Promise<ToolResult> {
+    const response = await apiClient.post<ToolResult>('/api/chat/execute-tool/', {
+      tool: 'execute_shell',
+      args: { command },
     });
     return response.data;
   }

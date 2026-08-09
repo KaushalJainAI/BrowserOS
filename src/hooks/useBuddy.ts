@@ -1,185 +1,169 @@
-import { useEffect, useRef, useState, useCallback } from 'react';
+/**
+ * The Buddy agent channel.
+ *
+ * The socket is an *action* channel, not a sync stream: the backend pushes
+ * `trigger_action` frames from the `buddy_{user_id}` group, and this hook hands
+ * every one of them to the action registry. Context flows the other way, in the
+ * body of the command request — not on this socket — so the desktop never
+ * streams its DOM upward on a timer.
+ *
+ * Two defects this replaces:
+ *   1. The old `executeAction` understood only `frontend_click` /
+ *      `frontend_fill` / `frontend_navigate`. Every `os_*` action the backend
+ *      emitted (open app, close, minimize, wallpaper, notify — all implemented
+ *      server-side in `buddy/views.py`) was parsed and then discarded, so the
+ *      agent could not actually drive the OS.
+ *   2. A `MutationObserver` on `document.body` re-sent the whole interactable
+ *      list on any DOM change. With a ticking clock in the top bar, that is a
+ *      permanent 1 Hz upload of the entire UI.
+ */
 
-export interface BuddyAction {
-  type: string;
-  action: string;
-  parameters: Record<string, any>;
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { useOSActions, useOSNotifications, useOSShell, useOSWindows } from '../contexts/osState';
+import { buildSnapshot, type OSSnapshot } from '../os/snapshot';
+import { getAccessToken } from '../api/auth';
+
+/** Exponential backoff with jitter, capped, so a downed backend is not hammered. */
+function reconnectDelay(attempt: number): number {
+  const base = Math.min(30_000, 1_000 * 2 ** attempt);
+  return base * (0.7 + Math.random() * 0.6);
 }
 
-export function useBuddy(enabled: boolean = true) {
-  const wsRef = useRef<WebSocket | null>(null);
-  const [isConnected, setIsConnected] = useState(false);
-  const [buddyAction, setBuddyAction] = useState<string | null>(null);
+function buildSocketUrl(token: string): string {
+  const configured = import.meta.env.VITE_WS_URL as string | undefined;
+  if (configured) {
+    return `${configured.replace(/\/$/, '')}/ws/buddy/?token=${encodeURIComponent(token)}`;
+  }
 
-  // Capture screen context
-  const captureContext = useCallback(() => {
-    const interactables = document.querySelectorAll('button, a, input, textarea, select, [role="button"], .os-window, .desktop-icon');
-    const elements: any[] = [];
-
-    interactables.forEach((el, index) => {
-      const htmlEl = el as HTMLElement;
-      // Skip hidden elements
-      if (htmlEl.offsetParent === null) return;
-
-      const buddyId = `buddy-node-${index}`;
-      htmlEl.setAttribute('data-buddy-id', buddyId);
-      
-      elements.push({
-        buddy_id: buddyId,
-        tag: htmlEl.tagName.toLowerCase(),
-        text: htmlEl.innerText?.trim() || htmlEl.getAttribute('aria-label') || htmlEl.getAttribute('placeholder') || htmlEl.getAttribute('title') || '',
-        type: htmlEl.getAttribute('type') || undefined,
-        className: htmlEl.className,
-      });
-    });
-
-    return {
-      url: window.location.href,
-      title: document.title,
-      interactables: elements,
-    };
-  }, []);
-
-  const sendContextUpdate = useCallback(() => {
-    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-      const context = captureContext();
-      wsRef.current.send(JSON.stringify({
-        type: 'context_update',
-        context
-      }));
+  // Derive from the API base so a frontend deployed on a different origin than
+  // the backend still reaches the right host.
+  const apiBase = import.meta.env.VITE_API_BASE_URL as string | undefined;
+  if (apiBase) {
+    try {
+      const url = new URL(apiBase);
+      const protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+      return `${protocol}//${url.host}/ws/buddy/?token=${encodeURIComponent(token)}`;
+    } catch {
+      // Malformed env value — fall through to origin inference.
     }
-  }, [captureContext]);
+  }
 
-  // Execute received actions
-  const executeAction = useCallback((action: string, params: Record<string, any>) => {
-    setBuddyAction(`Buddy is executing: ${action}`);
-    setTimeout(() => setBuddyAction(null), 3000);
+  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const isDevServer = window.location.port === '5173' || window.location.port === '3000';
+  const host = isDevServer ? `${window.location.hostname}:8000` : window.location.host;
+  return `${protocol}//${host}/ws/buddy/?token=${encodeURIComponent(token)}`;
+}
 
-    if (action === 'frontend_click') {
-      const el = document.querySelector(`[data-buddy-id="${params.buddy_id}"]`) as HTMLElement;
-      if (el) {
-        // Visual feedback
-        const originalOutline = el.style.outline;
-        el.style.outline = '4px solid #3b82f6';
-        setTimeout(() => {
-           el.style.outline = originalOutline;
-           el.click();
-        }, 500);
-      }
-    } else if (action === 'frontend_fill') {
-      const el = document.querySelector(`[data-buddy-id="${params.buddy_id}"]`) as HTMLInputElement | HTMLTextAreaElement;
-      if (el) {
-        const originalOutline = el.style.outline;
-        el.style.outline = '4px solid #3b82f6';
-        setTimeout(() => {
-           el.style.outline = originalOutline;
-           el.value = params.value;
-           el.dispatchEvent(new Event('input', { bubbles: true }));
-           el.dispatchEvent(new Event('change', { bubbles: true }));
-        }, 500);
-      }
-    } else if (action === 'frontend_navigate') {
-      if (params.url) {
-        window.location.href = params.url;
-      }
-    }
-  }, []);
+export interface BuddyChannel {
+  isConnected: boolean;
+  /** Name of the action currently executing, for the "Buddy is …" indicator. */
+  activeAction: string | null;
+  /** Builds the semantic OS snapshot to send with the next command. */
+  captureContext: () => OSSnapshot;
+}
+
+export function useBuddy(enabled: boolean = true): BuddyChannel {
+  const { runAgentAction, setAgentConnected } = useOSActions();
+  const { windows, activeWindowId } = useOSWindows();
+  const { theme, pinnedApps, desktopApps } = useOSShell();
+  const { clipboard } = useOSNotifications();
+
+  const [activeAction, setActiveAction] = useState<string | null>(null);
+  const [isConnected, setConnected] = useState(false);
+  const socketRef = useRef<WebSocket | null>(null);
+
+  // Snapshot inputs go through a ref so `captureContext` stays referentially
+  // stable and the socket effect never tears down on a window move.
+  const snapshotInput = useRef({ windows, activeWindowId, theme, pinnedApps, desktopApps, clipboard });
+  useEffect(() => {
+    snapshotInput.current = { windows, activeWindowId, theme, pinnedApps, desktopApps, clipboard };
+  }, [windows, activeWindowId, theme, pinnedApps, desktopApps, clipboard]);
+
+  const runActionRef = useRef(runAgentAction);
+  useEffect(() => { runActionRef.current = runAgentAction; }, [runAgentAction]);
+
+  const captureContext = useCallback(() => buildSnapshot(snapshotInput.current), [snapshotInput]);
 
   useEffect(() => {
-    let isManualClose = false;
-    let reconnectTimeout: ReturnType<typeof setTimeout>;
+    // Nothing to clear on these paths: `connected` starts false, and when
+    // `enabled` flips off it is the *previous* run's cleanup that resets the
+    // flags. Setting state synchronously in an effect body would just queue a
+    // second render for a value that is already correct.
+    if (!enabled) return;
 
-    if (!enabled) {
-      setIsConnected(false);
+    const token = getAccessToken();
+    if (!token) {
+      // Without a token the consumer closes us immediately; don't spin on it.
+      console.info('[Buddy] No auth token — agent channel idle.');
       return;
     }
 
+    let disposed = false;
+    let attempt = 0;
+    let retryHandle: ReturnType<typeof setTimeout> | undefined;
+
     const connect = () => {
-      if (wsRef.current && (wsRef.current.readyState === WebSocket.OPEN || wsRef.current.readyState === WebSocket.CONNECTING)) {
-        return;
-      }
+      if (disposed) return;
+      const socket = new WebSocket(buildSocketUrl(token));
+      socketRef.current = socket;
 
-      const token = window.localStorage.getItem('authToken');
-      if (!token) {
-        console.warn('Buddy: No auth token found');
-        return;
-      }
-
-      // Build robust URL
-      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const host = window.location.hostname;
-      // In development, the backend is typically on 8000. 
-      // In production, it might be the same host or a different domain.
-      const port = window.location.port === '5173' || window.location.port === '3000' ? '8000' : window.location.port;
-      const wsUrl = `${protocol}//${host}${port ? `:${port}` : ''}/ws/buddy/?token=${token}`;
-
-      console.log(`Buddy: Connecting to ${wsUrl}`);
-      const ws = new WebSocket(wsUrl);
-
-      ws.onopen = () => {
-        console.log('Buddy: WebSocket connected');
-        setIsConnected(true);
-        sendContextUpdate();
+      socket.onopen = () => {
+        if (disposed) return;
+        attempt = 0;
+        setConnected(true);
+        setAgentConnected(true);
       };
 
-      ws.onmessage = (event) => {
+      socket.onmessage = (event) => {
+        let frame: { type?: string; action?: string; parameters?: Record<string, unknown> };
         try {
-          const data = JSON.parse(event.data);
-          if (data.type === 'trigger_action') {
-            executeAction(data.action, data.parameters);
-          }
-        } catch (err) {
-          console.error('Buddy: Failed to parse WS message', err);
+          frame = JSON.parse(event.data);
+        } catch {
+          console.warn('[Buddy] Dropped unparseable frame.');
+          return;
         }
+        if (frame.type !== 'trigger_action' || !frame.action) return;
+
+        // Every action — os_*, fs_*, app_*, frontend_*, browser_* — resolves
+        // through the one registry, so a socket-delivered action behaves
+        // identically to one returned inline by the command endpoint.
+        const name = frame.action;
+        setActiveAction(name);
+        runActionRef.current(name, frame.parameters ?? {}, 'socket');
+        window.setTimeout(() => {
+          setActiveAction((current) => (current === name ? null : current));
+        }, 1600);
       };
 
-      ws.onclose = (event) => {
-        if (!isManualClose) {
-          console.log(`Buddy: WebSocket disconnected (Code: ${event.code}). Reconnecting...`);
-          setIsConnected(false);
-          reconnectTimeout = setTimeout(connect, 3000);
-        }
+      socket.onclose = () => {
+        // Guard against a stale socket's close event clobbering the state of a
+        // newer one that has already replaced it.
+        if (disposed || socketRef.current !== socket) return;
+        setConnected(false);
+        setAgentConnected(false);
+        const delay = reconnectDelay(attempt);
+        attempt += 1;
+        retryHandle = setTimeout(connect, delay);
       };
 
-      ws.onerror = (err) => {
-        console.error('Buddy: WebSocket error', err);
+      socket.onerror = () => {
+        // `onclose` always follows an error; reconnection is handled there.
+        socket.close();
       };
-
-      wsRef.current = ws;
     };
 
     connect();
 
     return () => {
-      isManualClose = true;
-      clearTimeout(reconnectTimeout);
-      if (wsRef.current) {
-        wsRef.current.close();
-        wsRef.current = null;
-      }
+      disposed = true;
+      clearTimeout(retryHandle);
+      const current = socketRef.current;
+      socketRef.current = null;
+      if (current && current.readyState <= WebSocket.OPEN) current.close(1000, 'unmounted');
+      setConnected(false);
+      setAgentConnected(false);
     };
-  }, [enabled, executeAction, sendContextUpdate]);
+  }, [enabled, setAgentConnected, runActionRef]);
 
-  // Optionally set up an observer to periodically update context when DOM changes
-  useEffect(() => {
-    if (!isConnected || !enabled) return;
-    
-    // Send context updates when mutations occur, debounced
-    let timeout: ReturnType<typeof setTimeout>;
-    const observer = new MutationObserver(() => {
-      clearTimeout(timeout);
-      timeout = setTimeout(() => {
-        sendContextUpdate();
-      }, 1000);
-    });
-
-    observer.observe(document.body, { childList: true, subtree: true });
-
-    return () => {
-      observer.disconnect();
-      clearTimeout(timeout);
-    };
-  }, [isConnected, enabled, sendContextUpdate]);
-
-  return { isConnected, captureContext, buddyAction };
+  return { isConnected, activeAction, captureContext };
 }

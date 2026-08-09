@@ -1,89 +1,250 @@
-import { Play, Plus, Image as ImageIcon, Type, LayoutTemplate } from 'lucide-react';
+/** SlideMaster — build a deck, present it, and save it to the filesystem. */
 
-export function PresentationEditorApp() {
-  return (
-    <div className="flex flex-col h-full bg-[#1e1e1e]">
-      {/* Top Bar */}
-      <div className="h-14 border-b border-white/10 flex items-center justify-between px-4 bg-black/20">
-        <div className="flex items-center gap-4">
-          <div className="font-medium">Q4 Roadmap Pitch</div>
-          <div className="flex items-center gap-1 bg-white/5 p-1 rounded">
-            <button className="p-1.5 hover:bg-white/10 rounded text-gray-300"><Type size={16} /></button>
-            <button className="p-1.5 hover:bg-white/10 rounded text-gray-300"><ImageIcon size={16} /></button>
-            <button className="p-1.5 hover:bg-white/10 rounded text-gray-300"><LayoutTemplate size={16} /></button>
-          </div>
+import { useCallback, useEffect, useState } from 'react';
+import {
+  Play, Plus, Trash2, Save, ChevronLeft, ChevronRight, X, Copy, Presentation,
+} from 'lucide-react';
+import { useOSActions, useWindowState } from '../../contexts/osState';
+import { vfs, HOME, join, basename } from '../../os/vfs';
+
+interface Slide {
+  id: string;
+  title: string;
+  body: string;
+  /** Index into THEMES. */
+  theme: number;
+}
+
+const THEMES = [
+  { name: 'Indigo', background: 'linear-gradient(135deg,#312e81,#1e1b4b)', text: '#f8fafc' },
+  { name: 'Slate', background: 'linear-gradient(135deg,#334155,#0f172a)', text: '#f8fafc' },
+  { name: 'Ember', background: 'linear-gradient(135deg,#9a3412,#7f1d1d)', text: '#fff7ed' },
+  { name: 'Mint', background: 'linear-gradient(135deg,#0f766e,#134e4a)', text: '#ecfdf5' },
+  { name: 'Paper', background: 'linear-gradient(135deg,#f8fafc,#e2e8f0)', text: '#0f172a' },
+];
+
+function newSlide(index: number): Slide {
+  return {
+    id: `slide_${Date.now()}_${index}`,
+    title: `Slide ${index + 1}`,
+    body: 'Add your content here.',
+    theme: index % THEMES.length,
+  };
+}
+
+/**
+ * Stable fallback for a deck that somehow has no slides — building it inline
+ * would hand every render a new array and invalidate the callbacks below.
+ */
+const FALLBACK_SLIDES: Slide[] = [newSlide(0)];
+
+export default function PresentationEditorApp() {
+  const { notify } = useOSActions();
+  const { state, setState, setTitle } = useWindowState({
+    slides: [
+      { id: 'slide_1', title: 'BrowserOS', body: 'An agent-operable desktop.', theme: 0 },
+      { id: 'slide_2', title: 'Everything is addressable', body: 'Apps, files and windows can all be driven by Buddy.', theme: 3 },
+    ] as Slide[],
+    current: 0,
+    path: null as string | null,
+  });
+
+  const slides = Array.isArray(state.slides) && state.slides.length
+    ? (state.slides as Slide[])
+    : FALLBACK_SLIDES;
+  const current = Math.min(Math.max(0, Number(state.current) || 0), slides.length - 1);
+  const path = typeof state.path === 'string' ? state.path : null;
+
+  const [presenting, setPresenting] = useState(false);
+
+  useEffect(() => {
+    setTitle(path ? basename(path) : 'Untitled deck');
+  }, [path, setTitle]);
+
+  const update = useCallback((index: number, patch: Partial<Slide>) => {
+    setState({ slides: slides.map((slide, position) => (position === index ? { ...slide, ...patch } : slide)) });
+  }, [slides, setState]);
+
+  const addSlide = useCallback(() => {
+    const next = [...slides, newSlide(slides.length)];
+    setState({ slides: next, current: next.length - 1 });
+  }, [slides, setState]);
+
+  const removeSlide = useCallback((index: number) => {
+    if (slides.length === 1) return;
+    const next = slides.filter((_, position) => position !== index);
+    setState({ slides: next, current: Math.min(current, next.length - 1) });
+  }, [slides, current, setState]);
+
+  const save = useCallback(() => {
+    const markdown = slides
+      .map((slide) => `# ${slide.title}\n\n${slide.body}`)
+      .join('\n\n---\n\n');
+    const target = path ?? vfs.uniquePath(join(`${HOME}/Documents`, 'deck.md'));
+    vfs.write(target, `${markdown}\n`);
+    if (!path) setState({ path: target });
+    notify({ message: `Saved deck to ${target}.`, type: 'success' });
+  }, [slides, path, setState, notify]);
+
+  // Presenting takes over the whole window, so arrow keys drive the deck.
+  useEffect(() => {
+    if (!presenting) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setPresenting(false);
+      if (event.key === 'ArrowRight' || event.key === ' ') {
+        event.preventDefault();
+        setState({ current: Math.min(current + 1, slides.length - 1) });
+      }
+      if (event.key === 'ArrowLeft') {
+        event.preventDefault();
+        setState({ current: Math.max(current - 1, 0) });
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [presenting, current, slides.length, setState]);
+
+  const slide = slides[current];
+  const theme = THEMES[slide.theme % THEMES.length];
+
+  if (presenting) {
+    return (
+      <div className="h-full w-full relative flex items-center justify-center" style={{ background: theme.background }}>
+        <div className="max-w-3xl px-12 text-center" style={{ color: theme.text }}>
+          <h1 className="text-[44px] font-semibold leading-tight mb-5">{slide.title}</h1>
+          <p className="text-[19px] leading-relaxed opacity-85 whitespace-pre-wrap">{slide.body}</p>
         </div>
-        <button className="flex items-center gap-2 px-4 py-2 bg-os-accent hover:bg-os-accent-hover text-white rounded-md text-sm transition-colors shadow-lg">
-          <Play size={16} fill="currentColor" /> Present
+
+        <button onClick={() => setPresenting(false)} className="absolute top-4 right-4 os-icon-button" aria-label="Exit presentation">
+          <X size={18} />
+        </button>
+        <div className="absolute bottom-5 left-1/2 -translate-x-1/2 flex items-center gap-3">
+          <button
+            onClick={() => setState({ current: Math.max(0, current - 1) })}
+            disabled={current === 0}
+            className="os-icon-button"
+            aria-label="Previous slide"
+          >
+            <ChevronLeft size={18} />
+          </button>
+          <span className="text-[12px] tabular-nums" style={{ color: theme.text, opacity: 0.7 }}>
+            {current + 1} / {slides.length}
+          </span>
+          <button
+            onClick={() => setState({ current: Math.min(slides.length - 1, current + 1) })}
+            disabled={current === slides.length - 1}
+            className="os-icon-button"
+            aria-label="Next slide"
+          >
+            <ChevronRight size={18} />
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="app-shell">
+      <div className="app-toolbar">
+        <button onClick={addSlide} className="os-button gap-2">
+          <Plus size={14} /> Slide
+        </button>
+        <button
+          onClick={() => {
+            const copy = { ...slide, id: `slide_${Date.now()}` };
+            setState({ slides: [...slides.slice(0, current + 1), copy, ...slides.slice(current + 1)] });
+          }}
+          className="os-icon-button"
+          aria-label="Duplicate slide"
+        >
+          <Copy size={15} />
+        </button>
+        <button
+          onClick={() => removeSlide(current)}
+          disabled={slides.length === 1}
+          className="os-icon-button"
+          aria-label="Delete slide"
+        >
+          <Trash2 size={15} />
+        </button>
+
+        <span className="w-px h-5 bg-[var(--os-border)] mx-1" />
+
+        {THEMES.map((entry, index) => (
+          <button
+            key={entry.name}
+            onClick={() => update(current, { theme: index })}
+            aria-label={`${entry.name} theme`}
+            title={entry.name}
+            className="w-6 h-6 rounded-md border transition-transform hover:scale-110"
+            style={{
+              background: entry.background,
+              borderColor: slide.theme === index ? 'var(--os-accent)' : 'var(--os-border)',
+              borderWidth: slide.theme === index ? 2 : 1,
+            }}
+          />
+        ))}
+
+        <span className="flex-1" />
+
+        <button onClick={save} className="os-icon-button" aria-label="Save deck" title="Save as markdown">
+          <Save size={15} />
+        </button>
+        <button onClick={() => setPresenting(true)} className="os-button os-button--accent gap-2">
+          <Play size={14} /> Present
         </button>
       </div>
 
-      <div className="flex-1 flex overflow-hidden">
-        {/* Thumbnails Sidebar */}
-        <div className="w-56 border-r border-white/10 bg-[#171717] p-4 flex flex-col gap-4 overflow-y-auto">
-          <div className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2 flex justify-between items-center">
-            Slides
-            <button className="text-gray-300 hover:text-white"><Plus size={16} /></button>
-          </div>
-          
-          <div className="relative group cursor-pointer">
-            <div className="absolute -left-3 top-2 text-xs text-gray-500 font-medium">1</div>
-            <div className="aspect-video bg-[#222] rounded-lg border-2 border-transparent group-hover:border-white/20 overflow-hidden p-2 flex flex-col justify-center items-center">
-               <div className="text-[10px] font-bold text-center">BrowserOS Vision</div>
-               <div className="text-[6px] text-gray-400 mt-1">Transforming the UI</div>
-            </div>
-          </div>
-          
-          <div className="relative group cursor-pointer">
-            <div className="absolute -left-3 top-2 text-xs text-os-accent font-medium">2</div>
-            <div className="aspect-video bg-white rounded-lg border-2 border-os-accent shadow-[0_0_0_2px_rgba(59,130,246,0.2)] overflow-hidden p-2">
-               <div className="text-[8px] font-bold text-black border-b border-gray-200 pb-1 mb-1">Q4 Roadmap</div>
-               <div className="flex gap-1">
-                 <div className="w-1/2 h-10 bg-blue-100 rounded" />
-                 <div className="w-1/2 flex flex-col gap-1">
-                   <div className="h-1 bg-gray-200 rounded w-full" />
-                   <div className="h-1 bg-gray-200 rounded w-4/5" />
-                   <div className="h-1 bg-gray-200 rounded w-3/4" />
-                 </div>
-               </div>
-            </div>
-          </div>
+      <div className="flex-1 flex min-h-0">
+        <aside className="w-44 shrink-0 border-r border-[var(--os-border)] overflow-y-auto p-2 space-y-1.5 bg-[var(--os-surface-sunken)]">
+          {slides.map((entry, index) => (
+            <button
+              key={entry.id}
+              onClick={() => setState({ current: index })}
+              className="w-full aspect-video rounded-lg border p-2 text-left overflow-hidden transition-transform hover:scale-[1.02]"
+              style={{
+                background: THEMES[entry.theme % THEMES.length].background,
+                borderColor: index === current ? 'var(--os-accent)' : 'var(--os-border)',
+                borderWidth: index === current ? 2 : 1,
+              }}
+              aria-label={`Slide ${index + 1}: ${entry.title}`}
+            >
+              <span
+                className="block text-[9px] font-semibold leading-tight line-clamp-3"
+                style={{ color: THEMES[entry.theme % THEMES.length].text }}
+              >
+                {entry.title}
+              </span>
+            </button>
+          ))}
+        </aside>
 
-          <div className="relative group cursor-pointer">
-            <div className="absolute -left-3 top-2 text-xs text-gray-500 font-medium">3</div>
-            <div className="aspect-video bg-[#222] rounded-lg border-2 border-transparent group-hover:border-white/20 overflow-hidden p-2 flex flex-col items-center justify-center">
-               <div className="w-10 h-10 rounded-full bg-gradient-to-tr from-purple-500 to-orange-500" />
+        <div className="flex-1 flex flex-col items-center justify-center p-8 min-w-0 gap-4">
+          <div
+            className="w-full max-w-2xl aspect-video rounded-2xl shadow-2xl flex items-center justify-center p-10"
+            style={{ background: theme.background }}
+          >
+            <div className="w-full text-center" style={{ color: theme.text }}>
+              <input
+                value={slide.title}
+                onChange={(event) => update(current, { title: event.target.value })}
+                className="w-full bg-transparent border-none outline-none text-center text-[26px] font-semibold mb-3"
+                style={{ color: theme.text }}
+                aria-label="Slide title"
+              />
+              <textarea
+                value={slide.body}
+                onChange={(event) => update(current, { body: event.target.value })}
+                rows={4}
+                className="w-full bg-transparent border-none outline-none text-center text-[14px] leading-relaxed resize-none opacity-85"
+                style={{ color: theme.text }}
+                aria-label="Slide body"
+              />
             </div>
           </div>
-        </div>
-
-        {/* Main Editor */}
-        <div className="flex-1 bg-[#252525] p-8 flex items-center justify-center overflow-auto">
-          {/* Active Slide */}
-          <div className="w-[800px] aspect-video bg-white shadow-2xl relative flex flex-col p-12">
-            <h1 className="text-5xl font-bold text-slate-800 mb-8 border-b-4 border-os-accent pb-4 inline-block tracking-tight">Q4 Architecture Roadmap</h1>
-            
-            <div className="grid grid-cols-2 gap-12 flex-1 mt-4">
-              <div className="bg-slate-50 rounded-xl p-6 border border-slate-100 shadow-sm flex flex-col justify-center">
-                <ul className="list-disc pl-6 text-slate-600 text-xl space-y-4">
-                  <li>Decoupled backend services</li>
-                  <li>Real-time websocket streaming</li>
-                  <li>Agentic task management</li>
-                  <li>Premium frontend aesthetics</li>
-                </ul>
-              </div>
-              
-              <div className="flex flex-col items-center justify-center gap-6">
-                <div className="w-48 h-32 bg-gradient-to-br from-blue-500 to-purple-600 rounded-2xl shadow-lg flex items-center justify-center text-white font-bold text-2xl transform rotate-2 hover:rotate-0 transition-all cursor-pointer">
-                  Backend
-                </div>
-                <div className="w-2 h-12 bg-slate-300" />
-                <div className="w-48 h-32 bg-gradient-to-br from-orange-500 to-pink-500 rounded-2xl shadow-lg flex items-center justify-center text-white font-bold text-2xl transform -rotate-2 hover:rotate-0 transition-all cursor-pointer">
-                  Frontend
-                </div>
-              </div>
-            </div>
-          </div>
+          <p className="text-[11.5px] text-[var(--os-text-dim)] flex items-center gap-1.5">
+            <Presentation size={12} /> Slide {current + 1} of {slides.length} · click the text to edit
+          </p>
         </div>
       </div>
     </div>

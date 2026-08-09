@@ -1,114 +1,191 @@
-import { useState } from 'react';
-import { Camera, Scissors, Monitor, AppWindow, Download, Share2 } from 'lucide-react';
+/**
+ * Screen Capture — real capture via the Screen Capture API.
+ *
+ * A web page cannot silently screenshot itself, so this asks the browser for a
+ * display-media stream: the user picks the surface and the browser mediates
+ * consent. Captures are saved into Pictures as real files.
+ */
 
-export function ScreenshotApp() {
-  const [mode, setMode] = useState<'screen' | 'window' | 'area'>('screen');
-  const [isCapturing, setIsCapturing] = useState(false);
-  const [preview, setPreview] = useState<string | null>(null);
+import { useCallback, useRef, useState } from 'react';
+import { Camera, Download, Save, Trash2, Monitor, ShieldAlert, Image as ImageIcon } from 'lucide-react';
+import { useOSActions } from '../../contexts/osState';
+import { vfs, HOME, join } from '../../os/vfs';
+import { relativeTime } from '../../os/time';
 
-  const handleCapture = () => {
-    setIsCapturing(true);
-    // Mock capture delay
-    setTimeout(() => {
-      setIsCapturing(false);
-      setPreview('https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?auto=format&fit=crop&q=80&w=800'); // Placeholder
-    }, 800);
-  };
-
-  return (
-    <div className="app-container p-6 flex flex-col items-center justify-center h-full bg-[#1e1e1e]">
-      {!preview ? (
-        <div className="max-w-md w-full text-center slide-in-bottom">
-          <div className="w-20 h-20 bg-os-accent/10 rounded-2xl flex items-center justify-center mx-auto mb-8">
-            <Camera size={40} className="text-os-accent" />
-          </div>
-          <h2 className="text-xl font-light mb-2">Screen Capture</h2>
-          <p className="text-sm text-secondary mb-8">Select a capture mode to begin</p>
-
-          <div className="grid grid-cols-3 gap-3 mb-12">
-            <button 
-              onClick={() => setMode('screen')}
-              className={`p-4 rounded-2xl border transition-all flex flex-col items-center gap-2
-                ${mode === 'screen' ? 'bg-os-accent border-os-accent text-white shadow-lg' : 'bg-white/5 border-white/10 text-secondary hover:bg-white/10'}`}
-            >
-              <Monitor size={24} />
-              <span className="text-[10px] font-bold uppercase tracking-wider">Screen</span>
-            </button>
-            <button 
-              onClick={() => setMode('window')}
-              className={`p-4 rounded-2xl border transition-all flex flex-col items-center gap-2
-                ${mode === 'window' ? 'bg-os-accent border-os-accent text-white shadow-lg' : 'bg-white/5 border-white/10 text-secondary hover:bg-white/10'}`}
-            >
-              <AppWindow size={24} />
-              <span className="text-[10px] font-bold uppercase tracking-wider">Window</span>
-            </button>
-            <button 
-              onClick={() => setMode('area')}
-              className={`p-4 rounded-2xl border transition-all flex flex-col items-center gap-2
-                ${mode === 'area' ? 'bg-os-accent border-os-accent text-white shadow-lg' : 'bg-white/5 border-white/10 text-secondary hover:bg-white/10'}`}
-            >
-              <Scissors size={24} />
-              <span className="text-[10px] font-bold uppercase tracking-wider">Area</span>
-            </button>
-          </div>
-
-          <button 
-            onClick={handleCapture}
-            disabled={isCapturing}
-            className={`w-full py-4 rounded-xl font-medium transition-all flex items-center justify-center gap-3
-              ${isCapturing ? 'bg-white/10 text-secondary' : 'bg-white text-black hover:scale-[1.02] active:scale-95'}`}
-          >
-            {isCapturing ? (
-              <div className="w-5 h-5 border-2 border-current border-t-transparent rounded-full animate-spin" />
-            ) : (
-              <Camera size={20} />
-            )}
-            {isCapturing ? 'Capturing...' : 'Take Screenshot'}
-          </button>
-        </div>
-      ) : (
-        <div className="w-full h-full flex flex-col animate-in zoom-in-95 duration-300">
-          <div className="flex-1 bg-black rounded-lg overflow-hidden border border-white/10 relative group">
-            <img src={preview} alt="Preview" className="w-full h-full object-contain" />
-            <div className="absolute inset-x-0 bottom-0 p-4 bg-gradient-to-t from-black/80 to-transparent flex justify-center gap-4 translate-y-full group-hover:translate-y-0 transition-transform">
-              <button className="flex items-center gap-2 px-4 py-2 bg-white text-black rounded-lg text-sm font-medium hover:bg-white/90">
-                <Download size={16} /> Save
-              </button>
-              <button className="flex items-center gap-2 px-4 py-2 bg-white/20 text-white rounded-lg text-sm font-medium hover:bg-white/30 backdrop-blur-md">
-                <Share2 size={16} /> Copy
-              </button>
-            </div>
-          </div>
-          <div className="mt-6 flex justify-between items-center text-secondary">
-            <span className="text-xs uppercase tracking-widest font-bold">Preview: screenshot_2026-02-20.png</span>
-            <button 
-              onClick={() => setPreview(null)}
-              className="text-xs hover:text-white transition-colors flex items-center gap-1"
-            >
-              <RefreshCw size={12} /> Discard & New
-            </button>
-          </div>
-        </div>
-      )}
-    </div>
-  );
+interface Capture {
+  id: string;
+  dataUrl: string;
+  at: number;
+  width: number;
+  height: number;
 }
 
-function RefreshCw({ size, className }: { size: number, className?: string }) {
+export default function ScreenshotApp() {
+  const { notify, openApp } = useOSActions();
+  const [captures, setCaptures] = useState<Capture[]>([]);
+  const [selected, setSelected] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
+
+  const capture = useCallback(async () => {
+    setError(null);
+
+    if (!navigator.mediaDevices?.getDisplayMedia) {
+      setError('This browser does not support screen capture.');
+      return;
+    }
+
+    setBusy(true);
+    let stream: MediaStream | null = null;
+    try {
+      stream = await navigator.mediaDevices.getDisplayMedia({
+        video: { displaySurface: 'browser' },
+        audio: false,
+      });
+
+      const video = videoRef.current;
+      if (!video) throw new Error('Capture surface unavailable.');
+      video.srcObject = stream;
+      video.muted = true;
+      await video.play();
+
+      // The first frame is often blank; wait two rAFs so the compositor has
+      // actually painted the shared surface before grabbing it.
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+
+      const width = video.videoWidth;
+      const height = video.videoHeight;
+      const canvas = document.createElement('canvas');
+      canvas.width = width;
+      canvas.height = height;
+      canvas.getContext('2d')?.drawImage(video, 0, 0, width, height);
+
+      const entry: Capture = {
+        id: `cap_${Date.now()}`,
+        dataUrl: canvas.toDataURL('image/png'),
+        at: Date.now(),
+        width,
+        height,
+      };
+      setCaptures((current) => [entry, ...current].slice(0, 12));
+      setSelected(entry.id);
+      notify({ message: 'Screen captured.', type: 'success' });
+    } catch (caught) {
+      // Cancelling the picker is a normal outcome, not an error worth shouting about.
+      const message = caught instanceof Error ? caught.message : 'Capture failed.';
+      setError(/denied|abort|cancel|permission/i.test(message) ? 'Capture cancelled.' : message);
+    } finally {
+      stream?.getTracks().forEach((track) => track.stop());
+      setBusy(false);
+    }
+  }, [notify]);
+
+  const active = captures.find((entry) => entry.id === selected) ?? captures[0] ?? null;
+
+  const save = useCallback((entry: Capture) => {
+    const stamp = new Date(entry.at).toISOString().slice(0, 19).replace(/[:T]/g, '-');
+    const path = vfs.uniquePath(join(`${HOME}/Pictures`, `capture-${stamp}.png`));
+    vfs.write(path, entry.dataUrl, 'image/png');
+    notify({ message: `Saved to ${path}.`, type: 'success' });
+  }, [notify]);
+
   return (
-    <svg 
-      xmlns="http://www.w3.org/2000/svg" 
-      width={size} 
-      height={size} 
-      viewBox="0 0 24 24" 
-      fill="none" 
-      stroke="currentColor" 
-      strokeWidth="2" 
-      strokeLinecap="round" 
-      strokeLinejoin="round" 
-      className={className}
-    >
-      <path d="M21 2v6h-6"/><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M3 22v-6h6"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/>
-    </svg>
+    <div className="app-shell">
+      <div className="app-toolbar">
+        <button onClick={capture} disabled={busy} className="os-button os-button--accent gap-2">
+          <Camera size={14} /> {busy ? 'Waiting for picker…' : 'Capture screen'}
+        </button>
+        <span className="flex-1" />
+        {active && (
+          <>
+            <button onClick={() => save(active)} className="os-button gap-2">
+              <Save size={14} /> Save to Pictures
+            </button>
+            <button
+              onClick={() => {
+                const anchor = document.createElement('a');
+                anchor.href = active.dataUrl;
+                anchor.download = `capture-${active.at}.png`;
+                anchor.click();
+              }}
+              className="os-icon-button"
+              aria-label="Download capture"
+            >
+              <Download size={15} />
+            </button>
+            <button
+              onClick={() => {
+                setCaptures((current) => current.filter((entry) => entry.id !== active.id));
+                setSelected(null);
+              }}
+              className="os-icon-button"
+              aria-label="Discard capture"
+            >
+              <Trash2 size={15} />
+            </button>
+          </>
+        )}
+      </div>
+
+      {/* Off-screen sink for the capture stream; never shown to the user. */}
+      <video ref={videoRef} className="hidden" playsInline muted />
+
+      <div className="flex-1 flex min-h-0">
+        <div className="flex-1 flex items-center justify-center p-6 min-w-0 bg-[var(--os-surface-sunken)]">
+          {active ? (
+            <img
+              src={active.dataUrl}
+              alt={`Screen capture from ${relativeTime(active.at)}`}
+              className="max-w-full max-h-full object-contain rounded-lg shadow-2xl"
+            />
+          ) : (
+            <div className="app-empty">
+              <Monitor size={38} className="opacity-30" />
+              <p className="text-[13px] font-medium">No captures yet</p>
+              <p className="text-[11.5px] max-w-sm leading-relaxed">
+                Capture goes through the browser’s own picker — you choose which tab,
+                window or screen to share, and nothing is recorded until you do.
+              </p>
+              {error && (
+                <p className="text-[11.5px] flex items-center gap-1.5 mt-1" style={{ color: 'var(--os-warning)' }}>
+                  <ShieldAlert size={12} /> {error}
+                </p>
+              )}
+            </div>
+          )}
+        </div>
+
+        {captures.length > 0 && (
+          <aside className="w-40 shrink-0 border-l border-[var(--os-border)] overflow-y-auto p-2 space-y-1.5 bg-[var(--os-surface-sunken)]">
+            {captures.map((entry) => (
+              <button
+                key={entry.id}
+                onClick={() => setSelected(entry.id)}
+                className="w-full rounded-lg overflow-hidden border transition-transform hover:scale-[1.03]"
+                style={{ borderColor: active?.id === entry.id ? 'var(--os-accent)' : 'var(--os-border)' }}
+                aria-label={`Capture from ${relativeTime(entry.at)}`}
+              >
+                <img src={entry.dataUrl} alt="" className="w-full aspect-video object-cover" />
+                <span className="block text-[9.5px] py-1 text-[var(--os-text-dim)]">
+                  {relativeTime(entry.at)}
+                </span>
+              </button>
+            ))}
+          </aside>
+        )}
+      </div>
+
+      <div className="app-statusbar">
+        <span>{captures.length} capture{captures.length === 1 ? '' : 's'} this session</span>
+        {active && <span>{active.width} × {active.height}</span>}
+        <button
+          onClick={() => openApp('explorer', { state: { cwd: `${HOME}/Pictures` } })}
+          className="ml-auto flex items-center gap-1.5 hover:text-[var(--os-text)]"
+        >
+          <ImageIcon size={11} /> Open Pictures
+        </button>
+      </div>
+    </div>
   );
 }

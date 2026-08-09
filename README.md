@@ -31,4 +31,16 @@ A modern, web-based operating system interface built with React, TypeScript, and
 
 ## Development
 
-BrowserOS is designed to be extensible. You can add new applications by creating components in `src/components/apps` and registering them in the `OSContext`.
+BrowserOS is designed to be extensible. Adding an application takes three edits:
+
+1. Create the component in `src/components/apps`.
+2. Add its id to `AppId` in `src/types/os.ts` and a metadata entry to `src/os/apps.ts`
+   (title, icon, default geometry, search keywords). Ids match the backend's `APP_ALIASES`
+   in `Backend/buddy/views.py`, so the agent's `os_open_app` resolves without a mapping.
+3. Register a lazy loader in `LOADERS` in `src/components/os/WindowRenderer.tsx`.
+
+Apps read and write their own persisted state through `useWindowState`, and reach the shell
+through the narrow hooks in `src/contexts/osState.ts` — `useOSActions` for commands such as
+`notify` and `openApp`, and `useOSWindows` / `useOSShell` / `useOSNotifications` /
+`useOSAgent` for state. Prefer those over the wide `useOS()` facade: an app that only calls
+actions then re-renders only on its own state, not on every OS change.
