@@ -21,7 +21,7 @@ export function useAIModels() {
 
   useEffect(() => {
     apiClient
-      .get<{ providers: AIProvider[] }>('/api/nodes/models/')
+      .get<{ providers: AIProvider[] }>('/api/llm/models/')
       .then(res => setProviders(res.data.providers))
       .catch(err => console.error('Failed to fetch AI models:', err))
       .finally(() => setIsLoading(false));

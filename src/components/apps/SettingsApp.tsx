@@ -9,7 +9,7 @@
 import { useMemo, useState } from 'react';
 import {
   Palette, Bot, Monitor, Info, Trash2, HardDrive, Keyboard, Pin,
-  Moon, Sun, Sparkles, ShieldCheck, Database, Zap, Check,
+  Moon, Sun, Eye, ShieldCheck, Database, Zap, Check,
 } from 'lucide-react';
 import { useOSActions, useOSAgent, useOSShell, useWindowState, APPS } from '../../contexts/osState';
 import { useAuth } from '../../contexts/authState';
@@ -159,7 +159,7 @@ export default function SettingsApp() {
 
               <Group title="Performance" hint="Turn effects off on low-powered machines.">
                 <Toggle
-                  icon={Sparkles}
+                  icon={Eye}
                   label="Reduce transparency and motion"
                   detail="Disables background blur and animation across the desktop."
                   value={theme.reducedEffects}

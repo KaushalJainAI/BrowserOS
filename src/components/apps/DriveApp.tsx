@@ -7,7 +7,7 @@
 
 import { useMemo, useState } from 'react';
 import {
-  HardDrive, Clock, Star, FileText, Image as ImageIcon, Table as TableIcon,
+  HardDrive, Clock, Bookmark, FileText, Image as ImageIcon, Table as TableIcon,
   Braces, FileCode, Trash2, ExternalLink, Search,
 } from 'lucide-react';
 import { useOSActions } from '../../contexts/osState';
@@ -21,7 +21,7 @@ type View = 'recent' | 'starred' | 'all' | 'trash';
 
 const VIEWS: Array<{ id: View; label: string; icon: typeof Clock }> = [
   { id: 'recent', label: 'Recent', icon: Clock },
-  { id: 'starred', label: 'Starred', icon: Star },
+  { id: 'starred', label: 'Starred', icon: Bookmark },
   { id: 'all', label: 'All files', icon: HardDrive },
   { id: 'trash', label: 'Trash', icon: Trash2 },
 ];
@@ -158,9 +158,9 @@ export default function DriveApp() {
                     <button
                       onClick={() => toggleStar(node.path)}
                       className="os-icon-button w-7 h-7 shrink-0"
-                      aria-label={isStarred ? 'Remove star' : 'Add star'}
+                      aria-label={isStarred ? 'Remove bookmark' : 'Add bookmark'}
                     >
-                      <Star
+                      <Bookmark
                         size={13}
                         fill={isStarred ? 'currentColor' : 'none'}
                         style={{ color: isStarred ? 'var(--os-warning)' : undefined }}

@@ -4,7 +4,7 @@
  */
 
 import {
-  Zap, Shield, LogOut, Database, Moon, Sun, Sparkles, Settings as SettingsIcon,
+  Zap, Shield, LogOut, Database, Moon, Sun, Eye, Settings as SettingsIcon,
   Bot, Grid2x2, Minimize2,
 } from 'lucide-react';
 import { useOSActions, useOSAgent, useOSShell, useOSWindows } from '../../contexts/osState';
@@ -94,7 +94,7 @@ export function QuickSettings() {
           className="os-button gap-2"
           title="Disable blur and animation for better performance"
         >
-          <Sparkles size={14} />
+          <Eye size={14} />
           {theme.reducedEffects ? 'Plain' : 'Effects'}
         </button>
       </div>

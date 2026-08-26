@@ -10,7 +10,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Bot, User, X, ChevronDown, Plus, Copy, Check, Monitor, ArrowUp,
-  Sparkles, Terminal as TerminalIcon, AlertTriangle, ChevronRight, Zap,
+  Terminal as TerminalIcon, AlertTriangle, ChevronRight, Zap,
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -309,7 +309,7 @@ export function BuddyPanel() {
         {isLoading && (
           <div className="flex gap-3 os-anim-fade">
             <span className="w-7 h-7 rounded-lg bg-[rgb(var(--os-accent-rgb)/0.14)] flex items-center justify-center shrink-0">
-              <Sparkles size={14} className="text-[var(--os-accent)] animate-pulse" />
+              <Bot size={14} className="text-[var(--os-accent)] animate-pulse" />
             </span>
             <div className="flex-1 pt-1.5">
               <div className="flex items-center justify-between gap-2 mb-2">

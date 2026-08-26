@@ -1,7 +1,7 @@
 /** SimWorld — a real-time particle simulation you can steer. */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Play, Pause, RotateCcw, Wind, Sparkles, MousePointer2 } from 'lucide-react';
+import { Play, Pause, RotateCcw, Wind, Atom, MousePointer2 } from 'lucide-react';
 import { useLatestRef } from '../../hooks/useLatestRef';
 
 interface Particle {
@@ -171,7 +171,7 @@ export default function SimulatorApp() {
       <div className="flex-1 flex flex-col min-w-0">
         <div className="app-toolbar">
           <span className="flex items-center gap-2 text-[12.5px] font-semibold">
-            <Sparkles size={14} style={{ color: 'var(--os-accent)' }} />
+            <Atom size={14} style={{ color: 'var(--os-accent)' }} />
             Particle dynamics
           </span>
           <span className="flex-1" />

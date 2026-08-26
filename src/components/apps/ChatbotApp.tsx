@@ -7,7 +7,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Bot, User, ArrowUp, Sparkles, Plus, AlertTriangle, Monitor, PanelRight } from 'lucide-react';
+import { Bot, User, ArrowUp, Lightbulb, Plus, AlertTriangle, Monitor, PanelRight } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { useOSActions, useOSAgent, useOSNotifications, useOSShell, useOSWindows, useWindowState } from '../../contexts/osState';
@@ -169,7 +169,7 @@ export default function ChatbotApp() {
               <div className="grid gap-1.5 max-w-md mx-auto">
                 {PROMPTS.map((prompt) => (
                   <button key={prompt} onClick={() => void send(prompt)} className="os-row text-[12.5px]">
-                    <Sparkles size={13} className="shrink-0" style={{ color: 'var(--os-accent)' }} />
+                    <Lightbulb size={13} className="shrink-0" style={{ color: 'var(--os-accent)' }} />
                     <span className="truncate">{prompt}</span>
                   </button>
                 ))}
@@ -234,7 +234,7 @@ export default function ChatbotApp() {
           {isLoading && (
             <div className="flex gap-4">
               <span className="w-8 h-8 rounded-lg bg-[rgb(var(--os-accent-rgb)/0.14)] flex items-center justify-center shrink-0">
-                <Sparkles size={15} className="animate-pulse" style={{ color: 'var(--os-accent)' }} />
+                <Bot size={15} className="animate-pulse" style={{ color: 'var(--os-accent)' }} />
               </span>
               <div className="flex-1 pt-2">
                 <div className="h-0.5 w-40 rounded-full bg-[var(--os-hover)] overflow-hidden">
