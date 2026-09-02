@@ -60,7 +60,7 @@ export const chatService = {
     if (intent && intent !== 'normal') body.intent = intent;
     if (approveToolCall) body.approve_tool_call = approveToolCall;
 
-    const response = await fetch(`${API_BASE_URL}/api/chat/sessions/${sessionId}/stream/`, {
+    const response = await fetch(`${API_BASE_URL}/api/chat/sessions/${sessionId}/message/stream/`, {
       method: 'POST',
       credentials: 'include',
       headers: { 'Content-Type': 'application/json', ...authHeaders() },
