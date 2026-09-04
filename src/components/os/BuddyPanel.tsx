@@ -12,8 +12,7 @@ import {
   Bot, User, X, ChevronDown, Plus, Copy, Check, Monitor, ArrowUp,
   Terminal as TerminalIcon, AlertTriangle, ChevronRight, Zap,
 } from 'lucide-react';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
+import Markdown from './Markdown';
 import { useOSActions, useOSAgent, useOSShell } from '../../contexts/osState';
 import { apiClient } from '../../api/client';
 import { useBuddy } from '../../hooks/useBuddy';
@@ -270,14 +269,14 @@ export function BuddyPanel() {
                 </span>
               </div>
 
-              <div className={`prose-buddy os-selectable ${message.isError ? 'text-[#f87171]' : ''}`}>
+              <div className={`os-selectable ${message.isError ? 'text-[#f87171]' : ''}`}>
                 {message.isError && (
                   <p className="flex items-center gap-1.5 font-medium">
                     <AlertTriangle size={13} /> {message.content}
                   </p>
                 )}
                 {!message.isError && (
-                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown>
+                  <Markdown content={message.content} />
                 )}
               </div>
 

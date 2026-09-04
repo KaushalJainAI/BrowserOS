@@ -8,8 +8,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Bot, User, ArrowUp, Lightbulb, Plus, AlertTriangle, Monitor, PanelRight } from 'lucide-react';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
+import Markdown from '../os/Markdown';
 import { useOSActions, useOSAgent, useOSNotifications, useOSShell, useOSWindows, useWindowState } from '../../contexts/osState';
 import { apiClient } from '../../api/client';
 import { buildSnapshot } from '../../os/snapshot';
@@ -203,9 +202,7 @@ export default function ChatbotApp() {
                     <AlertTriangle size={14} /> {message.content}
                   </p>
                 ) : (
-                  <div className="prose-buddy os-selectable">
-                    <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown>
-                  </div>
+                  <Markdown content={message.content} />
                 )}
 
                 {!!message.actions?.length && (

@@ -11,8 +11,7 @@ import {
   Save, FilePlus, FolderOpen, Eye, Pencil, Columns2, Bold, Italic,
   List, ListOrdered, Heading2, Code2, Link2, Quote, Download,
 } from 'lucide-react';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
+import Markdown from '../os/Markdown';
 import { useOSActions, useWindowState } from '../../contexts/osState';
 import { useDocument } from '../../hooks/useVfs';
 import { vfs, HOME, join, basename } from '../../os/vfs';
@@ -241,8 +240,8 @@ export default function WordEditorApp() {
 
         {mode !== 'edit' && (
           <div className={`${mode === 'split' ? 'w-1/2' : 'w-full'} h-full overflow-y-auto p-6`}>
-            <div className="prose-buddy max-w-2xl mx-auto os-selectable">
-              <ReactMarkdown remarkPlugins={[remarkGfm]}>{document_.content}</ReactMarkdown>
+            <div className="max-w-2xl mx-auto">
+              <Markdown content={document_.content} />
             </div>
           </div>
         )}
