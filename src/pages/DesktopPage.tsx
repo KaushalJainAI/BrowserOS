@@ -1,178 +1,274 @@
-import { useOS } from '../contexts/OSContext';
+/**
+ * The desktop shell: background, icons, window layer, dock, overlays and the
+ * global keyboard map.
+ */
+
+import { useCallback, useEffect, useState } from 'react';
+import {
+  Bot, RefreshCw, Monitor, Settings as SettingsIcon, Grid2x2, Minimize2,
+  SortAsc, LayoutGrid, FolderPlus, Palette,
+} from 'lucide-react';
+import { useOSActions, useOSAgent, useOSShell, useOSWindows, APPS } from '../contexts/osState';
 import { TopBar } from '../components/os/TopBar';
-import type { AppId } from '../types/os';
 import { Dock } from '../components/os/Dock';
 import { BuddyPanel } from '../components/os/BuddyPanel';
 import { SearchOverlay } from '../components/os/SearchOverlay';
 import { AppsOverlay } from '../components/os/AppsOverlay';
 import { ContextMenu } from '../components/os/ContextMenu';
-import { Bot, RefreshCw, Layout, Settings as SettingsIcon, Monitor } from 'lucide-react';
-import { useEffect } from 'react';
 import { DesktopIcon } from '../components/os/DesktopIcon';
 import { WindowRenderer } from '../components/os/WindowRenderer';
+import { SnapPreview } from '../components/os/Window';
+import { WindowSwitcher } from '../components/os/WindowSwitcher';
+import { Toasts } from '../components/os/Toasts';
+import type { AppId, SnapZone } from '../types/os';
 
 export function DesktopPage() {
-  const { 
-    openApp, toggleBuddy, isSearchOpen, toggleSearch, 
-    showContextMenu, pinnedApps, pinApp, unpinApp,
-    nextWindow, addToClipboard, isBuddyOpen, wallpaper,
-    desktopApps, sortDesktop, removeFromDesktop,
-    toggleQuickSettings, toggleNotifications,
-    windows
-  } = useOS();
+  const { openApp, closeWindow, toggleBuddy, setOverlay, showContextMenu, closeContextMenu, sortDesktop, tileWindows, minimizeAll, snapWindow, toggleMaximize, resetWorkspace } = useOSActions();
+  const { activeWindowId, windows } = useOSWindows();
+  const { theme, isBuddyOpen, buddyWidth, overlay, desktopApps } = useOSShell();
+  const { isAgentConnected } = useOSAgent();
 
+  const [selected, setSelected] = useState<AppId[]>([]);
+
+  const selectIcon = useCallback((appId: AppId, additive: boolean) => {
+    setSelected((current) => {
+      if (!additive) return [appId];
+      return current.includes(appId)
+        ? current.filter((id) => id !== appId)
+        : [...current, appId];
+    });
+  }, []);
+
+  // ── Global keyboard map ──────────────────────────────────────────────────
   useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if ((e.ctrlKey && e.key === 'f') || (e.metaKey && e.key === ' ')) {
-        e.preventDefault();
-        toggleSearch();
+    const onKeyDown = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      const isTyping = Boolean(
+        target && (
+          target.tagName === 'INPUT'
+          || target.tagName === 'TEXTAREA'
+          || target.isContentEditable
+        ),
+      );
+      const mod = event.ctrlKey || event.metaKey;
+
+      // Escape always closes the frontmost transient surface.
+      if (event.key === 'Escape') {
+        if (overlay) { setOverlay(null); return; }
+        closeContextMenu();
+        return;
       }
 
-      if ((e.altKey || e.ctrlKey) && e.key === 'Tab') {
-        e.preventDefault();
-        nextWindow();
+      // Ctrl/Cmd+K opens search from anywhere, including while typing —
+      // it is the one shortcut that should always win.
+      if (mod && event.key.toLowerCase() === 'k') {
+        event.preventDefault();
+        setOverlay('search');
+        return;
       }
 
-      if (e.ctrlKey && e.shiftKey && e.key === 'S') {
-        e.preventDefault();
+      // Everything below would otherwise steal keys from a focused editor.
+      if (isTyping) return;
+
+      if (mod && event.key.toLowerCase() === 'w' && activeWindowId) {
+        event.preventDefault();
+        closeWindow(activeWindowId);
+        return;
+      }
+
+      if (mod && event.shiftKey && event.key.toLowerCase() === 'b') {
+        event.preventDefault();
+        toggleBuddy();
+        return;
+      }
+
+      if (mod && event.shiftKey && event.key.toLowerCase() === 's') {
+        event.preventDefault();
         openApp('screenshot');
+        return;
       }
 
-      if (e.ctrlKey && e.shiftKey && e.key === 'V') {
-        e.preventDefault();
+      if (mod && event.shiftKey && event.key.toLowerCase() === 'v') {
+        event.preventDefault();
         openApp('clipboard');
+        return;
+      }
+
+      if (mod && event.key.toLowerCase() === 'd') {
+        event.preventDefault();
+        minimizeAll();
+        return;
+      }
+
+      // Super/Meta + arrows tile the focused window, like most desktops.
+      if (event.metaKey && activeWindowId && event.key.startsWith('Arrow')) {
+        const zone: Record<string, SnapZone | 'restore'> = {
+          ArrowLeft: 'left',
+          ArrowRight: 'right',
+          ArrowUp: 'maximized',
+          ArrowDown: 'restore',
+        };
+        const action = zone[event.key];
+        if (action) {
+          event.preventDefault();
+          if (action === 'restore') snapWindow(activeWindowId, null);
+          else snapWindow(activeWindowId, action);
+        }
+        return;
+      }
+
+      if (event.key === 'F11' && activeWindowId) {
+        event.preventDefault();
+        toggleMaximize(activeWindowId);
       }
     };
 
-    const handleCopy = () => {
-      const selection = window.getSelection()?.toString();
-      if (selection) {
-        addToClipboard(selection);
-      }
-    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [
+    overlay, setOverlay, closeContextMenu, activeWindowId, closeWindow,
+    toggleBuddy, openApp, minimizeAll, snapWindow, toggleMaximize,
+  ]);
 
-    window.addEventListener('keydown', handleKeyDown);
-    window.addEventListener('copy', handleCopy);
-    return () => {
-      window.removeEventListener('keydown', handleKeyDown);
-      window.removeEventListener('copy', handleCopy);
-    };
-  }, [toggleSearch, nextWindow, openApp, addToClipboard]);
-
-  const handleContext = (e: React.MouseEvent, type: 'desktop' | 'app', appId?: AppId) => {
-    if (e.button !== 2 && !(e.ctrlKey || e.metaKey)) return;
-    
-    e.preventDefault();
-    e.stopPropagation();
-
-    const options = [];
-
-    if (type === 'app' && appId) {
-      const isPinned = pinnedApps.includes(appId);
-      options.push(
-        { label: 'Open', onClick: () => openApp(appId) },
-        { 
-          label: isPinned ? 'Unpin from Dock' : 'Pin to Dock', 
-          onClick: () => isPinned ? unpinApp(appId) : pinApp(appId) 
+  const onDesktopContext = useCallback((event: React.MouseEvent) => {
+    event.preventDefault();
+    setSelected([]);
+    const notOnDesktop = (Object.keys(APPS) as AppId[]).filter((id) => !desktopApps.includes(id));
+    showContextMenu(event, [
+      { label: 'New window…', icon: LayoutGrid, onClick: () => setOverlay('apps') },
+      ...(notOnDesktop.length
+        ? [{
+            label: 'Add app to desktop…',
+            icon: FolderPlus,
+            onClick: () => setOverlay('apps'),
+          }]
+        : []),
+      { label: 'Sort by name', icon: SortAsc, divider: true, onClick: () => sortDesktop('name') },
+      { label: 'Sort by category', icon: SortAsc, onClick: () => sortDesktop('category') },
+      { label: 'Tile windows', icon: Grid2x2, divider: true, onClick: tileWindows },
+      { label: 'Show desktop', icon: Minimize2, shortcut: 'Ctrl+D', onClick: minimizeAll },
+      { label: 'Change appearance', icon: Palette, divider: true, onClick: () => openApp('settings', { state: { section: 'appearance' } }) },
+      { label: 'Display settings', icon: Monitor, onClick: () => openApp('settings', { state: { section: 'appearance' } }) },
+      { label: 'System settings', icon: SettingsIcon, onClick: () => openApp('settings') },
+      {
+        label: 'Reset workspace',
+        icon: RefreshCw,
+        variant: 'danger',
+        divider: true,
+        onClick: () => {
+          if (window.confirm('Reset the desktop, files and preferences to their defaults?')) {
+            resetWorkspace();
+          }
         },
-        { label: 'Remove from Desktop', icon: RefreshCw, onClick: () => removeFromDesktop(appId), variant: 'danger' as const },
-        { label: 'App Details', onClick: () => console.log('Details', appId) }
-      );
-    } else {
-      options.push(
-        { label: 'Sort by Name', icon: Layout, onClick: () => sortDesktop('name') },
-        { label: 'Change Background', icon: Layout, onClick: () => openApp('settings') },
-        { label: 'Display Settings', icon: Monitor, onClick: () => openApp('settings') },
-        { label: 'System Settings', icon: SettingsIcon, onClick: () => openApp('settings') },
-        { label: 'Refresh Desktop', icon: RefreshCw, onClick: () => window.location.reload() }
-      );
-    }
-
-    showContextMenu(e, options);
-  };
+      },
+    ]);
+  }, [
+    desktopApps, showContextMenu, setOverlay, sortDesktop, tileWindows,
+    minimizeAll, openApp, resetWorkspace,
+  ]);
 
   return (
-    <div 
-      className="os-container" 
-      onMouseDown={(e) => {
-        handleContext(e, 'desktop');
-        // Close popovers on click
-        toggleQuickSettings(false);
-        toggleNotifications(false);
-      }} 
-      onContextMenu={(e) => e.preventDefault()}
-    >
-      <div className="os-background" style={{ background: wallpaper, backgroundSize: 'cover', backgroundPosition: 'center' }} />
+    <div className="os-container">
+      <div className="os-background" style={{ background: theme.wallpaper }} />
 
-      {/* Top Bar (GNOME/Ubuntu) */}
       <TopBar />
 
-      <div className="workspace-area">
-        {/* Desktop Area */}
-        <div className="desktop relative w-full h-full overflow-hidden">
-          <div className="desktop-items grid grid-cols-[repeat(auto-fill,110px)] gap-6 content-start p-4 h-full">
+      <main className="flex-1 relative min-h-0">
+        {/* Desktop surface: icons live in a grid, clicks here clear selection. */}
+        <div
+          className="absolute inset-0 overflow-hidden"
+          style={{ right: isBuddyOpen ? buddyWidth : 0, transition: 'right 260ms cubic-bezier(0.2,0.9,0.3,1)' }}
+          onPointerDown={() => {
+            setSelected([]);
+            if (overlay === 'quickSettings' || overlay === 'notifications') setOverlay(null);
+          }}
+          onContextMenu={onDesktopContext}
+        >
+          <div className="grid grid-cols-[repeat(auto-fill,100px)] auto-rows-[104px] gap-2 content-start p-4 h-full">
             {desktopApps.map((appId) => (
-              <DesktopIcon key={appId} appId={appId} />
+              <DesktopIcon
+                key={appId}
+                appId={appId}
+                isSelected={selected.includes(appId)}
+                onSelect={selectIcon}
+              />
             ))}
           </div>
 
-          {/* Trash Bin Area */}
-          <div 
-            id="desktop-trash"
-            className="absolute bottom-20 right-8 w-24 h-24 flex flex-col items-center justify-center gap-2 rounded-2xl border-2 border-dashed border-white/10 text-white/20 hover:text-red-400 hover:border-red-400/50 hover:bg-red-400/5 transition-all z-0"
-          >
-            <RefreshCw size={32} className="rotate-45" />
-            <span className="text-[10px] uppercase tracking-widest font-bold">Trash Bin</span>
-          </div>
+          {desktopApps.length === 0 && (
+            <p className="absolute inset-0 flex items-center justify-center text-[13px] text-white/40 pointer-events-none">
+              Right-click the desktop to add apps
+            </p>
+          )}
+        </div>
 
-          {/* Absolute Buddy Panel */}
-          <div className={`absolute top-0 bottom-0 right-0 z-[8000] w-[320px] bg-[#09090b] border-l border-white/10 transition-all duration-300 ease-[cubic-bezier(0.19,1,0.22,1)] ${
-            isBuddyOpen ? 'translate-x-0 opacity-100 pointer-events-auto' : 'translate-x-full opacity-0 pointer-events-none'
-          }`}>
-            <BuddyPanel />
+        {/* Window layer, inset to match the Buddy panel. */}
+        <div
+          className="absolute left-0 bottom-0 pointer-events-none z-[5000]"
+          style={{
+            top: 0,
+            right: isBuddyOpen ? buddyWidth : 0,
+            transition: 'right 260ms cubic-bezier(0.2,0.9,0.3,1)',
+          }}
+        >
+          <SnapPreview />
+          <WindowRenderer />
+        </div>
+
+        {/* Dock: always present, lifted when nothing is open. */}
+        <div
+          className="absolute bottom-3 z-[9000] pointer-events-none"
+          style={{
+            left: 0,
+            right: isBuddyOpen ? buddyWidth : 0,
+            display: 'flex',
+            justifyContent: 'center',
+            transition: 'right 260ms cubic-bezier(0.2,0.9,0.3,1)',
+          }}
+        >
+          <div className="pointer-events-auto">
+            <Dock />
           </div>
         </div>
-      </div>
 
-      {/* Global Windows Layer - Spans the screen below TopBar, adapts to BuddyPanel */}
-      <div 
-        className="absolute top-8 left-0 bottom-0 pointer-events-none z-[5000] transition-all duration-300 ease-in-out"
-        style={{ right: isBuddyOpen ? '320px' : '0' }}
-      >
-        <WindowRenderer />
-      </div>
+        {/* Buddy panel */}
+        <aside
+          className="absolute top-0 bottom-0 right-0 z-[9100]"
+          style={{
+            width: buddyWidth,
+            transform: isBuddyOpen ? 'translateX(0)' : `translateX(${buddyWidth}px)`,
+            opacity: isBuddyOpen ? 1 : 0,
+            pointerEvents: isBuddyOpen ? 'auto' : 'none',
+            transition: 'transform 260ms cubic-bezier(0.2,0.9,0.3,1), opacity 200ms ease',
+          }}
+          aria-hidden={!isBuddyOpen}
+        >
+          {isBuddyOpen && <BuddyPanel />}
+        </aside>
 
-      {/* Overlays */}
-      <SearchOverlay isOpen={isSearchOpen} onClose={toggleSearch} />
+        {!isBuddyOpen && (
+          <button
+            onClick={() => toggleBuddy(true)}
+            className="buddy-toggle"
+            data-connected={isAgentConnected}
+            aria-label="Open Buddy"
+            title="Open Buddy (Ctrl+Shift+B)"
+          >
+            <Bot size={23} />
+          </button>
+        )}
+      </main>
+
+      <SearchOverlay />
       <AppsOverlay />
+      <WindowSwitcher />
       <ContextMenu />
+      <Toasts />
 
-      {/* Invisible Trigger Area for Dock Auto-Hide */}
-      {windows.length > 0 && (
-        <div className="absolute bottom-0 left-0 w-full h-4 z-[8999] peer" />
-      )}
-
-      {/* Floating Bottom Dock */}
-      <div 
-        className={`absolute bottom-4 -translate-x-1/2 z-[9000] transition-all duration-500 ease-[cubic-bezier(0.19,1,0.22,1)] ${
-          windows.length === 0 
-            ? 'translate-y-0 opacity-100' 
-            : 'translate-y-20 opacity-0 peer-hover:translate-y-0 peer-hover:opacity-100 hover:translate-y-0 hover:opacity-100'
-        }`}
-        style={{ left: isBuddyOpen ? 'calc(50% - 160px)' : '50%' }}
-      >
-        <Dock />
-      </div>
-
-      {/* Floating AskBuddy Button */}
-      <button 
-        onClick={toggleBuddy}
-        className="buddy-toggle-btn absolute right-4 z-[9000]"
-        style={{ bottom: '8px' }}
-        title="Ask Buddy"
-      >
-        <Bot size={24} />
-      </button>
+      {/* Screen-reader announcement of window count, kept out of the layout. */}
+      <span className="sr-only" role="status" aria-live="polite">
+        {windows.length} window{windows.length === 1 ? '' : 's'} open
+      </span>
     </div>
   );
 }

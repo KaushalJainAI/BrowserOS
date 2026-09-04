@@ -1,76 +1,75 @@
-import { useOS, APPS } from '../../contexts/OSContext';
+import { memo } from 'react';
+import { ExternalLink, Pin, PinOff, Trash2 } from 'lucide-react';
+import { useOSActions, useOSShell, APPS } from '../../contexts/osState';
 import type { AppId } from '../../types/os';
-import React, { useRef, useState, memo } from 'react';
-import Draggable from 'react-draggable';
 
 interface DesktopIconProps {
   appId: AppId;
+  isSelected: boolean;
+  onSelect: (appId: AppId, additive: boolean) => void;
 }
 
-export const DesktopIcon = memo(function DesktopIcon({ appId }: DesktopIconProps) {
-  const { openApp, showContextMenu, pinnedApps, pinApp, unpinApp, removeFromDesktop } = useOS();
-  const Icon = APPS[appId].icon;
-  const nodeRef = useRef<HTMLDivElement>(null);
-  const [isDragging, setIsDragging] = useState(false);
-
-  const handleStop = () => {
-    setIsDragging(false);
-    
-    // Check for collision with Trash Bin
-    const trashBin = document.getElementById('desktop-trash');
-    const iconRect = nodeRef.current?.getBoundingClientRect();
-    const trashRect = trashBin?.getBoundingClientRect();
-
-    if (iconRect && trashRect) {
-      const overlap = !(
-        iconRect.right < trashRect.left || 
-        iconRect.left > trashRect.right || 
-        iconRect.bottom < trashRect.top || 
-        iconRect.top > trashRect.bottom
-      );
-
-      if (overlap) {
-        removeFromDesktop(appId);
-      }
-    }
-  };
-
-  const handleContext = (e: React.MouseEvent) => {
-    if (e.button !== 2 && !(e.ctrlKey || e.metaKey)) return;
-    e.preventDefault();
-    e.stopPropagation();
-
-    const isPinned = pinnedApps.includes(appId);
-    showContextMenu(e, [
-      { label: 'Open', onClick: () => openApp(appId) },
-      { 
-        label: isPinned ? 'Unpin from Dock' : 'Pin to Dock', 
-        onClick: () => isPinned ? unpinApp(appId) : pinApp(appId) 
-      },
-      { label: 'App Details', onClick: () => console.log('Details', appId) }
-    ]);
-  };
+/**
+ * Desktop icons live in a CSS grid rather than being freely positioned. The
+ * previous version wrapped each one in a draggable inside a grid, so dragging
+ * moved an element the grid immediately re-laid-out — the icon snapped back,
+ * and the only working "drag" was the one onto the trash. Grid order is the
+ * real model here, so ordering is exposed through the context menu and sorting
+ * instead of a gesture that cannot persist.
+ */
+export const DesktopIcon = memo(function DesktopIcon({ appId, isSelected, onSelect }: DesktopIconProps) {
+  const { openApp, showContextMenu, pinApp, unpinApp, removeFromDesktop } = useOSActions();
+  const { pinnedApps } = useOSShell();
+  const meta = APPS[appId];
+  const Icon = meta.icon;
+  const isPinned = pinnedApps.includes(appId);
 
   return (
-    <Draggable 
-      nodeRef={nodeRef} 
-      bounds="parent"
-      onStart={() => setIsDragging(true)}
-      onStop={handleStop}
+    <button
+      className="os-desktop-icon"
+      data-selected={isSelected}
+      aria-label={`${meta.title}. ${meta.description}`}
+      onClick={(event) => {
+        event.stopPropagation();
+        onSelect(appId, event.ctrlKey || event.metaKey);
+      }}
+      onDoubleClick={(event) => {
+        event.stopPropagation();
+        openApp(appId);
+      }}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          openApp(appId);
+        }
+      }}
+      onContextMenu={(event) => {
+        event.stopPropagation();
+        onSelect(appId, false);
+        showContextMenu(event, [
+          { label: 'Open', icon: ExternalLink, onClick: () => openApp(appId) },
+          ...(meta.multiInstance
+            ? [{ label: 'Open in new window', onClick: () => openApp(appId, { forceNew: true }) }]
+            : []),
+          {
+            label: isPinned ? 'Unpin from dock' : 'Pin to dock',
+            icon: isPinned ? PinOff : Pin,
+            divider: true,
+            onClick: () => (isPinned ? unpinApp(appId) : pinApp(appId)),
+          },
+          {
+            label: 'Remove from desktop',
+            icon: Trash2,
+            variant: 'danger',
+            onClick: () => removeFromDesktop(appId),
+          },
+        ]);
+      }}
     >
-      <div 
-        ref={nodeRef}
-        className={`desktop-icon flex items-center justify-center flex-col gap-2 p-3 rounded-xl hover:bg-white/10 cursor-pointer text-center os-transition select-none z-10 hover:z-20 w-24 h-24 ${isDragging ? 'dragging' : ''}`}
-        onClick={() => openApp(appId)}
-        onMouseDown={handleContext}
-      >
-        <div className="w-16 h-16 flex items-center justify-center bg-white/5 group-hover:bg-white/10 rounded-2xl shadow-sm border border-white/5 group-hover:border-white/10 transition-all group-active:scale-90">
-          <Icon size={40} className="drop-shadow-lg text-os-accent pointer-events-none group-hover:scale-110 transition-transform" />
-        </div>
-        <span className="text-white text-[11px] font-semibold drop-shadow-[0_2px_4px_rgba(0,0,0,0.8)] leading-snug pb-[2px] px-1 break-words line-clamp-2 pointer-events-none">
-          {APPS[appId].title}
-        </span>
-      </div>
-    </Draggable>
+      <span className={`os-desktop-icon__glyph bg-linear-to-br ${meta.tint}`}>
+        <Icon size={25} strokeWidth={1.9} />
+      </span>
+      <span className="os-desktop-icon__label">{meta.title}</span>
+    </button>
   );
 });

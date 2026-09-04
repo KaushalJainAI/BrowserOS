@@ -1,5 +1,3 @@
-
-import './App.css';
 import { AuthProvider } from './contexts/AuthContext';
 import { OSProvider } from './contexts/OSContext';
 import { DesktopPage } from './pages/DesktopPage';

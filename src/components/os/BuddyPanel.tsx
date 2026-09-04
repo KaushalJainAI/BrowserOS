@@ -1,32 +1,34 @@
-import { useState, useRef, useEffect } from 'react';
-import { 
-  Bot, 
-  User, 
-  X,
-  PlusCircle,
-  History,
-  ArrowRight,
-  ChevronDown,
-  Plus,
-  Copy,
-  Check,
-  Monitor,
-  FileCode,
-  Mic,
-  Command,
-  Sparkles
+/**
+ * The Buddy side panel — the agent's seat at the desktop.
+ *
+ * Context is attached to the outgoing command (semantic OS state, built at send
+ * time) rather than streamed on the socket, and every action the backend
+ * returns is executed through the shared registry and shown in an audit trail
+ * beneath the reply, so the user can always see what the agent touched.
+ */
+
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  Bot, User, X, ChevronDown, Plus, Copy, Check, Monitor, ArrowUp,
+  Terminal as TerminalIcon, AlertTriangle, ChevronRight, Zap,
 } from 'lucide-react';
-import { useOS } from '../../contexts/OSContext';
+import Markdown from './Markdown';
+import { useOSActions, useOSAgent, useOSShell } from '../../contexts/osState';
 import { apiClient } from '../../api/client';
 import { useBuddy } from '../../hooks/useBuddy';
 import { useAIModels } from '../../hooks/useAIModels';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
+import { summarizeSnapshot } from '../../os/snapshot';
+import type { AgentActionRecord } from '../../types/os';
+import { relativeTime } from '../../os/time';
 
 interface Message {
+  id: string;
   role: 'user' | 'assistant';
   content: string;
-  time: string;
+  at: number;
+  /** Actions performed while handling this message, shown inline beneath it. */
+  actions?: AgentActionRecord[];
+  isError?: boolean;
 }
 
 interface BuddyCommandResponse {
@@ -34,432 +36,472 @@ interface BuddyCommandResponse {
   message: string;
   action_details?: {
     type: string;
-    params: Record<string, unknown>;
-    resolved_from_text: boolean;
+    params?: Record<string, unknown>;
+    details?: Record<string, unknown>;
     command_text?: string | null;
-    details: Record<string, unknown>;
   };
   supported_examples?: string[];
 }
 
+const SUGGESTIONS = [
+  'Open the terminal and list my documents',
+  'Snap Files to the left and DocWriter to the right',
+  'Write a project brief to /home/Documents/brief.md',
+  'Switch to light mode with an emerald accent',
+];
 
+const GREETING: Message = {
+  id: 'greeting',
+  role: 'assistant',
+  at: Date.now(),
+  content:
+    "I'm Buddy, your OS agent. I can open and arrange apps, read and write files, "
+    + 'change how the desktop looks, and work inside your documents. Tell me what you need.',
+};
 
 export function BuddyPanel() {
-  const { isBuddyOpen, toggleBuddy, applyBuddyAction } = useOS();
-  const [screenContextEnabled, setScreenContextEnabled] = useState(true);
-  const { buddyAction } = useBuddy(screenContextEnabled);
-  
-  const [messages, setMessages] = useState<Message[]>([
-    {
-      role: 'assistant',
-      content: "Hello! I'm AskBuddy, your OS agent. I can help you orchestrate workflows, manage files, or just explain how things work here. How can I assist you?",
-      time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-    }
-  ]);
+  const { toggleBuddy, runAgentAction, setScreenContextEnabled, setBuddyWidth, notify } = useOSActions();
+  const { isBuddyOpen, buddyWidth } = useOSShell();
+  const { agentLog, screenContextEnabled } = useOSAgent();
+
+  const { isConnected, activeAction, captureContext } = useBuddy(isBuddyOpen);
+  const { providers } = useAIModels();
+
+  const [messages, setMessages] = useState<Message[]>([GREETING]);
   const [input, setInput] = useState('');
-  const [isLoading, setIsLoading] = useState(false);
-  const [showHistory, setShowHistory] = useState(false);
-  const [isModelOpen, setIsModelOpen] = useState(false);
-  const [copiedId, setCopiedId] = useState<number | null>(null);
-  const [thinkingTime, setThinkingTime] = useState(0);
-  const [thinkingStatus, setThinkingStatus] = useState('Buddy is thinking...');
+  const [isLoading, setLoading] = useState(false);
+  const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [isModelOpen, setModelOpen] = useState(false);
+  const [showContextPreview, setShowContextPreview] = useState(false);
+  const [elapsed, setElapsed] = useState(0);
 
-  const [llmProvider, setLlmProvider] = useState('');
-  const [llmModel, setLlmModel] = useState('');
+  const [provider, setProvider] = useState('');
+  const [model, setModel] = useState('');
 
-  const { providers: dynamicProviders } = useAIModels();
-
-  // Pick the first provider with credentials as default once providers load.
-  useEffect(() => {
-    if (!dynamicProviders.length || llmProvider) return;
-    const first = dynamicProviders.find(p => p.has_credentials) ?? dynamicProviders[0];
-    setLlmProvider(first.slug);
-    setLlmModel(first.models[0]?.value ?? '');
-  }, [dynamicProviders, llmProvider]);
-  
-  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const endRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-  const copyToClipboard = (text: string, id: number) => {
-    navigator.clipboard.writeText(text);
-    setCopiedId(id);
-    setTimeout(() => setCopiedId(null), 2000);
-  };
-
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  };
+  // Default to the first provider that actually has credentials configured.
+  useEffect(() => {
+    if (!providers.length || provider) return;
+    const first = providers.find((entry) => entry.has_credentials) ?? providers[0];
+    setProvider(first.slug);
+    setModel(first.models[0]?.value ?? '');
+  }, [providers, provider]);
 
   useEffect(() => {
-    scrollToBottom();
-  }, [messages]);
+    endRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+  }, [messages, isLoading]);
 
-  // Textarea Auto-Grow
+  // Auto-grow the composer up to a ceiling, then let it scroll.
   useEffect(() => {
-    const el = textareaRef.current;
-    if (!el) return;
-    el.style.height = "auto";
-    el.style.height = Math.min(el.scrollHeight, 120) + "px";
+    const element = textareaRef.current;
+    if (!element) return;
+    element.style.height = 'auto';
+    element.style.height = `${Math.min(element.scrollHeight, 168)}px`;
   }, [input]);
 
-  // Thinking Timer & Status cycling
   useEffect(() => {
-    let timer: any;
-    let statusInterval: any;
-    
-    if (isLoading) {
-      setThinkingTime(0);
-      setThinkingStatus('Buddy is thinking...');
-      
-      timer = setInterval(() => {
-        setThinkingTime(prev => prev + 0.1);
-      }, 100);
-
-      const statuses = [
-        'Analyzing your request...',
-        'Scanning screen context...',
-        'Orchestrating workflow...',
-        'Searching for tools...',
-        'Formulating response...'
-      ];
-      let statusIdx = 0;
-      statusInterval = setInterval(() => {
-        statusIdx++;
-        setThinkingStatus(statuses[statusIdx % statuses.length]);
-      }, 2500);
-    } else {
-      setThinkingTime(0);
+    if (!isLoading) {
+      setElapsed(0);
+      return;
     }
-
-    return () => {
-      clearInterval(timer);
-      clearInterval(statusInterval);
-    };
+    const started = Date.now();
+    const handle = setInterval(() => setElapsed((Date.now() - started) / 1000), 100);
+    return () => clearInterval(handle);
   }, [isLoading]);
 
-  if (!isBuddyOpen) return null;
+  const copy = useCallback((text: string, id: string) => {
+    navigator.clipboard.writeText(text).then(() => {
+      setCopiedId(id);
+      window.setTimeout(() => setCopiedId((current) => (current === id ? null : current)), 1800);
+    }).catch(() => notify({ message: 'Could not access the clipboard.', type: 'error' }));
+  }, [notify]);
 
-  const handleSend = async () => {
-    const trimmed = input.trim();
-    if (!trimmed) return;
+  const send = useCallback(async (raw?: string) => {
+    const text = (raw ?? input).trim();
+    if (!text || isLoading) return;
 
-    const userMsg: Message = {
-      role: 'user',
-      content: trimmed,
-      time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-    };
-
-    setMessages(prev => [...prev, userMsg]);
+    const userMessage: Message = { id: `u_${Date.now()}`, role: 'user', content: text, at: Date.now() };
+    setMessages((prev) => [...prev, userMessage]);
     setInput('');
-    setIsLoading(true);
+    setLoading(true);
 
     try {
-      const response = await apiClient.post<BuddyCommandResponse>('/api/buddy/commands/', {
-        command: trimmed,
-        provider: llmProvider,
-        model: llmModel,
-      });
+      // The snapshot is built here, at send time — this is the only moment the
+      // desktop's state leaves the machine, and only when the user opted in.
+      const payload: Record<string, unknown> = { command: text, provider, model };
+      if (screenContextEnabled) payload.context = captureContext();
 
-      if (response.data.action_details) {
-        applyBuddyAction(response.data.action_details.type, response.data.action_details.details || {});
+      const response = await apiClient.post<BuddyCommandResponse>('/api/buddy/commands/', payload);
+      const data = response.data;
+
+      const performed: AgentActionRecord[] = [];
+      if (data.action_details?.type) {
+        // The backend nests resolved arguments under `details` and echoes the
+        // raw ones under `params`; merge so either shape dispatches.
+        const parameters = {
+          ...(data.action_details.params ?? {}),
+          ...(data.action_details.details ?? {}),
+        };
+        performed.push(runAgentAction(data.action_details.type, parameters, 'http'));
       }
 
-      const aiMsg: Message = {
+      setMessages((prev) => [...prev, {
+        id: `a_${Date.now()}`,
         role: 'assistant',
-        content: response.data.message,
-        time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-      };
-      setMessages(prev => [...prev, aiMsg]);
+        content: data.message || 'Done.',
+        at: Date.now(),
+        actions: performed,
+        isError: data.status === 'error',
+      }]);
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Buddy could not process that command.';
-      setMessages(prev => [...prev, {
+      setMessages((prev) => [...prev, {
+        id: `a_${Date.now()}`,
         role: 'assistant',
-        content: message,
-        time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+        content: error instanceof Error ? error.message : 'Buddy could not process that command.',
+        at: Date.now(),
+        isError: true,
       }]);
     } finally {
-      setIsLoading(false);
+      setLoading(false);
     }
-  };
+  }, [input, isLoading, provider, model, screenContextEnabled, captureContext, runAgentAction]);
 
-  const handleKey = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      handleSend();
+  const onKeyDown = useCallback((event: React.KeyboardEvent) => {
+    if (event.key === 'Enter' && !event.shiftKey) {
+      event.preventDefault();
+      void send();
     }
-  };
+  }, [send]);
+
+  // Panel resize by dragging its left edge.
+  const onResizePointerDown = useCallback((event: React.PointerEvent) => {
+    event.preventDefault();
+    const startX = event.clientX;
+    const startWidth = buddyWidth;
+    const onMove = (moveEvent: PointerEvent) => setBuddyWidth(startWidth - (moveEvent.clientX - startX));
+    const onUp = () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+    };
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+  }, [buddyWidth, setBuddyWidth]);
+
+  const contextPreview = useMemo(
+    () => (showContextPreview ? summarizeSnapshot(captureContext()) : ''),
+    [showContextPreview, captureContext],
+  );
+
+  const recentActions = agentLog.slice(0, 6);
+  const activeModel = providers.find((entry) => entry.slug === provider);
 
   return (
-    <div className="buddy-panel h-full flex flex-col relative font-sans text-white bg-[#0a0a0c]">
+    <div className="buddy-panel relative">
+      <div className="buddy-resizer" onPointerDown={onResizePointerDown} />
 
-      {/* Header - Claude Style */}
-      <div className="h-14 glass-morphism flex items-center justify-between px-6 shrink-0 relative z-30 border-b border-white/5">
-        <div className="flex items-center gap-3">
-           <div className="p-1.5 rounded-lg bg-indigo-500/10 text-indigo-400">
-             <Bot className="w-4 h-4" />
-           </div>
-           <span className="text-sm font-bold text-white/90 truncate max-w-[200px]">
-             {messages.length > 1 ? "Optimizing Buddy Environment" : "New Session"}
-           </span>
-        </div>
-        
-        <div className="flex items-center gap-1">
-          <button 
-            onClick={() => setScreenContextEnabled(!screenContextEnabled)}
-            className={`p-2 rounded-lg transition-all ${
-              screenContextEnabled 
-                ? 'text-indigo-400 bg-indigo-500/10' 
-                : 'text-white/30 hover:text-white hover:bg-white/5'
-            }`}
-            title={screenContextEnabled ? 'Screen Context: On' : 'Screen Context: Off'}
-          >
-            <Monitor className="w-4 h-4" />
-          </button>
-          <button 
-            onClick={() => setShowHistory(!showHistory)}
-            className="p-2 text-white/30 hover:text-white hover:bg-white/5 rounded-lg transition-all"
-            title="History"
-          >
-            <History className="w-4 h-4" />
-          </button>
-          <button 
-            onClick={() => setMessages([messages[0]])}
-            className="p-2 text-white/30 hover:text-white hover:bg-white/5 rounded-lg transition-all"
-            title="New Chat"
-          >
-            <Plus className="w-4 h-4" />
-          </button>
-          <div className="w-px h-4 bg-white/10 mx-2" />
-          <button onClick={toggleBuddy} className="p-2 hover:bg-white/5 rounded-lg text-white/30 transition-all">
-            <X className="w-5 h-5" />
-          </button>
-        </div>
-      </div>
-
-      {/* Messages Area */}
-      <div className="flex-1 overflow-y-auto p-6 z-10 custom-scrollbar bg-[#0a0a0c]">
-        <div className="max-w-3xl mx-auto space-y-8">
-          {messages.map((message, index) => (
-            <div
-              key={index}
-              className={`flex gap-5 animate-in fade-in slide-in-from-bottom-2 duration-300`}
-            >
-              <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 border border-white/5 ${
-                message.role === 'assistant' 
-                  ? 'bg-indigo-500/10 text-indigo-400' 
-                  : 'bg-white/5 text-white/40'
-              }`}>
-                {message.role === 'assistant' ? <Bot className="w-4 h-4" /> : <User className="w-4 h-4" />}
-              </div>
-              
-              <div className="flex-1 flex flex-col min-w-0">
-                <div className="flex items-center gap-2 mb-1.5">
-                  <span className="text-[11px] font-black uppercase tracking-widest text-white/30">
-                    {message.role === 'assistant' ? 'Buddy' : 'You'}
-                  </span>
-                  <span className="text-[10px] text-white/10 font-medium tracking-tight">
-                    {message.time}
-                  </span>
-                </div>
-                
-                <div className="text-[14px] leading-relaxed text-white/80 font-normal prose-buddy">
-                  <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                    {message.content}
-                  </ReactMarkdown>
-                </div>
-                
-                {/* Actions */}
-                <div className="flex items-center gap-3 mt-3">
-                  <button
-                    onClick={() => copyToClipboard(message.content, index)}
-                    className="p-1.5 hover:bg-white/5 rounded text-white/20 hover:text-white/60 transition-colors"
-                  >
-                    {copiedId === index ? <Check className="w-3.5 h-3.5 text-green-500" /> : <Copy className="w-3.5 h-3.5" />}
-                  </button>
-                </div>
-              </div>
-            </div>
-          ))}
-
-          {isLoading && (
-            <div className="flex gap-5 animate-in fade-in duration-300">
-              <div className="w-8 h-8 rounded-full bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center shrink-0">
-                <Sparkles className="w-4 h-4 text-indigo-400 animate-pulse" />
-              </div>
-              <div className="flex flex-col gap-2 pt-1.5 flex-1 min-w-0">
-                 <div className="flex items-center justify-between gap-2">
-                   <span className="text-[10px] font-black uppercase tracking-widest text-white/40 truncate">
-                     {buddyAction || thinkingStatus}
-                   </span>
-                   <span className="text-[10px] font-mono text-white/20 shrink-0">
-                     ({thinkingTime.toFixed(1)}s)
-                   </span>
-                 </div>
-                 <div className="w-48 h-0.5 bg-white/5 rounded-full overflow-hidden">
-                    <div className="h-full bg-indigo-500/40 rounded-full animate-indeterminate-slide" />
-                 </div>
-              </div>
-            </div>
-          )}
-
-          <div ref={messagesEndRef} />
-        </div>
-      </div>
-
-      {/* Input Area - Claude Style Action Bar */}
-      <div className="p-6 bg-[#0a0a0c] border-t border-white/5 relative z-20">
-        <div className="max-w-3xl mx-auto w-full">
-          <div className="relative flex flex-col bg-white/[0.03] border border-white/10 rounded-2xl focus-within:border-indigo-500/40 focus-within:bg-white/[0.05] transition-all duration-300 backdrop-blur-xl group shadow-2xl">
-            
-            {/* Textarea */}
-            <div className="px-4 pt-4 pb-2">
-              <textarea
-                ref={textareaRef}
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                onKeyDown={handleKey}
-                placeholder="Ask me anything..."
-                className="w-full bg-transparent border-none focus:outline-none resize-none max-h-[200px] overflow-y-auto text-sm leading-relaxed text-white placeholder-white/20"
-                rows={1}
+      {/* ── Header ── */}
+      <header className="h-12 shrink-0 flex items-center justify-between px-3 border-b border-[var(--os-border)]">
+        <div className="flex items-center gap-2.5 min-w-0">
+          <span className="w-7 h-7 rounded-lg bg-linear-to-br from-indigo-400 to-violet-600 flex items-center justify-center text-white shrink-0">
+            <Bot size={15} />
+          </span>
+          <div className="min-w-0">
+            <p className="text-[13px] font-semibold leading-tight truncate">Buddy</p>
+            <p className="text-[10px] leading-tight text-[var(--os-text-dim)] flex items-center gap-1">
+              <span
+                className="w-1.5 h-1.5 rounded-full"
+                style={{ background: isConnected ? 'var(--os-success)' : 'var(--os-text-dim)' }}
               />
-              <div className="text-[10px] text-white/10 font-medium flex items-center gap-1.5 mt-1 pointer-events-none select-none">
-                <Command className="w-2.5 h-2.5" />
-                <span>esc to focus or unfocus Buddy</span>
+              {isConnected ? 'Connected to OS channel' : 'Offline — commands still work'}
+            </p>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-0.5">
+          <button
+            onClick={() => setScreenContextEnabled(!screenContextEnabled)}
+            data-active={screenContextEnabled}
+            className="os-icon-button"
+            aria-label={screenContextEnabled ? 'Disable screen context' : 'Enable screen context'}
+            title={screenContextEnabled
+              ? 'Screen context on — desktop state is sent with each message'
+              : 'Screen context off — Buddy cannot see your desktop'}
+          >
+            <Monitor size={15} />
+          </button>
+          <button
+            onClick={() => setMessages([GREETING])}
+            className="os-icon-button"
+            aria-label="New conversation"
+            title="New conversation"
+          >
+            <Plus size={15} />
+          </button>
+          <button onClick={() => toggleBuddy(false)} className="os-icon-button" aria-label="Close Buddy">
+            <X size={16} />
+          </button>
+        </div>
+      </header>
+
+      {/* ── Transcript ── */}
+      <div className="flex-1 overflow-y-auto px-4 py-5 space-y-6">
+        {messages.map((message) => (
+          <article key={message.id} className="flex gap-3 os-anim-rise">
+            <span
+              className={`w-7 h-7 rounded-lg flex items-center justify-center shrink-0 ${
+                message.role === 'assistant'
+                  ? 'bg-[rgb(var(--os-accent-rgb)/0.14)] text-[var(--os-accent)]'
+                  : 'bg-[var(--os-hover)] text-[var(--os-text-dim)]'
+              }`}
+            >
+              {message.role === 'assistant' ? <Bot size={14} /> : <User size={14} />}
+            </span>
+
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-2 mb-1.5">
+                <span className="text-[10px] font-bold uppercase tracking-widest text-[var(--os-text-dim)]">
+                  {message.role === 'assistant' ? 'Buddy' : 'You'}
+                </span>
+                <span className="text-[10px] text-[var(--os-text-dim)] opacity-60">
+                  {relativeTime(message.at)}
+                </span>
+              </div>
+
+              <div className={`os-selectable ${message.isError ? 'text-[#f87171]' : ''}`}>
+                {message.isError && (
+                  <p className="flex items-center gap-1.5 font-medium">
+                    <AlertTriangle size={13} /> {message.content}
+                  </p>
+                )}
+                {!message.isError && (
+                  <Markdown content={message.content} />
+                )}
+              </div>
+
+              {!!message.actions?.length && (
+                <ul className="mt-2.5 space-y-1">
+                  {message.actions.map((action) => (
+                    <li key={action.id}>
+                      <ActionRow record={action} />
+                    </li>
+                  ))}
+                </ul>
+              )}
+
+              {message.role === 'assistant' && !message.isError && message.id !== 'greeting' && (
+                <button
+                  onClick={() => copy(message.content, message.id)}
+                  className="os-icon-button mt-1.5 -ml-1.5"
+                  aria-label="Copy reply"
+                >
+                  {copiedId === message.id
+                    ? <Check size={13} className="text-[var(--os-success)]" />
+                    : <Copy size={13} />}
+                </button>
+              )}
+            </div>
+          </article>
+        ))}
+
+        {isLoading && (
+          <div className="flex gap-3 os-anim-fade">
+            <span className="w-7 h-7 rounded-lg bg-[rgb(var(--os-accent-rgb)/0.14)] flex items-center justify-center shrink-0">
+              <Bot size={14} className="text-[var(--os-accent)] animate-pulse" />
+            </span>
+            <div className="flex-1 pt-1.5">
+              <div className="flex items-center justify-between gap-2 mb-2">
+                <span className="text-[10px] font-bold uppercase tracking-widest text-[var(--os-text-muted)] truncate">
+                  {activeAction ? `Running ${activeAction}` : 'Thinking'}
+                </span>
+                <span className="text-[10px] mono text-[var(--os-text-dim)] shrink-0">
+                  {elapsed.toFixed(1)}s
+                </span>
+              </div>
+              <div className="h-0.5 rounded-full bg-[var(--os-hover)] overflow-hidden">
+                <div className="h-full w-1/3 rounded-full bg-[var(--os-accent)] os-indeterminate" />
               </div>
             </div>
+          </div>
+        )}
 
-            {/* Action Bar */}
-            <div className="h-12 px-2 flex items-center justify-between border-t border-white/5 mt-2 bg-white/[0.02] rounded-b-2xl">
-              <div className="flex items-center gap-1">
-                <button className="action-bar-icon" title="Add Content">
-                  <PlusCircle className="w-4.5 h-4.5" />
-                </button>
-                <div className="w-px h-4 bg-white/10 mx-1" />
-                <div className="flex items-center gap-2 px-2 py-1.5 rounded-lg bg-white/5 border border-white/5">
-                   <FileCode className="w-3.5 h-3.5 text-white/40" />
-                   <span className="text-[10px] font-bold text-white/60 tracking-tight">BuddyPanel.tsx</span>
-                </div>
-                <button className="action-bar-icon" title="Voice Input">
-                  <Mic className="w-4.5 h-4.5" />
-                </button>
-              </div>
+        {messages.length === 1 && !isLoading && (
+          <div className="space-y-1.5 pt-2">
+            <p className="os-field-label px-1 pb-1">Try</p>
+            {SUGGESTIONS.map((suggestion) => (
+              <button
+                key={suggestion}
+                onClick={() => void send(suggestion)}
+                className="os-row text-[12.5px] group"
+              >
+                <Zap size={13} className="shrink-0 text-[var(--os-accent)]" />
+                <span className="flex-1 truncate">{suggestion}</span>
+                <ChevronRight size={13} className="shrink-0 opacity-0 group-hover:opacity-60" />
+              </button>
+            ))}
+          </div>
+        )}
 
-              <div className="flex items-center gap-2">
-                <button 
-                  onClick={() => setIsModelOpen(!isModelOpen)}
-                  className="px-3 py-1.5 rounded-lg bg-white/5 hover:bg-white/10 border border-white/5 flex items-center gap-2 transition-all"
-                >
-                   <span className="text-[9px] font-bold text-white/40 uppercase tracking-tighter">
-                     {llmModel.split('-')[0]}
-                   </span>
-                   <ChevronDown className="w-3 h-3 text-white/20" />
-                </button>
-                <button 
-                  onClick={handleSend}
-                  disabled={!input.trim() || isLoading}
-                  className={`w-8 h-8 rounded-lg transition-all flex items-center justify-center shrink-0 ${
-                    input.trim() 
-                      ? 'premium-gradient text-white shadow-lg active:scale-95' 
-                      : 'bg-white/5 text-white/10 cursor-not-allowed'
-                  }`}
-                >
-                  <ArrowRight className="w-4.5 h-4.5 -rotate-90" />
-                </button>
-              </div>
+        <div ref={endRef} />
+      </div>
+
+      {/* ── Recent agent activity ── */}
+      {recentActions.length > 0 && (
+        <details className="shrink-0 border-t border-[var(--os-border)] group">
+          <summary className="h-9 px-4 flex items-center gap-2 cursor-pointer text-[11px] font-semibold text-[var(--os-text-muted)] hover:bg-[var(--os-hover)] list-none">
+            <TerminalIcon size={12} />
+            Activity
+            <span className="os-chip ml-auto h-[18px]">{agentLog.length}</span>
+            <ChevronDown size={13} className="transition-transform group-open:rotate-180" />
+          </summary>
+          <ul className="max-h-40 overflow-y-auto px-3 pb-3 space-y-1">
+            {recentActions.map((record) => (
+              <li key={record.id}><ActionRow record={record} showTime /></li>
+            ))}
+          </ul>
+        </details>
+      )}
+
+      {/* ── Context preview ── */}
+      {showContextPreview && (
+        <div className="shrink-0 border-t border-[var(--os-border)] max-h-48 overflow-y-auto p-3">
+          <p className="os-field-label mb-2">What Buddy will see</p>
+          <pre className="mono text-[10.5px] leading-relaxed text-[var(--os-text-muted)] whitespace-pre-wrap os-selectable">
+            {contextPreview}
+          </pre>
+        </div>
+      )}
+
+      {/* ── Composer ── */}
+      <div className="shrink-0 p-3 border-t border-[var(--os-border)]">
+        <div className="rounded-xl border border-[var(--os-border)] bg-[var(--os-surface-sunken)] focus-within:border-[var(--os-accent)] transition-colors">
+          <textarea
+            ref={textareaRef}
+            value={input}
+            onChange={(event) => setInput(event.target.value)}
+            onKeyDown={onKeyDown}
+            rows={1}
+            placeholder="Ask Buddy to do something…"
+            aria-label="Message Buddy"
+            className="w-full bg-transparent border-none outline-none resize-none px-3 pt-3 pb-2 text-[13px] leading-relaxed text-[var(--os-text)] placeholder:text-[var(--os-text-dim)]"
+          />
+
+          <div className="h-10 px-2 flex items-center justify-between border-t border-[var(--os-border)]">
+            <div className="flex items-center gap-1 min-w-0">
+              <button
+                onClick={() => setShowContextPreview(!showContextPreview)}
+                data-active={showContextPreview}
+                className="os-icon-button"
+                aria-label="Preview the context sent to Buddy"
+                title="Preview the context sent to Buddy"
+              >
+                <Monitor size={14} />
+              </button>
+              {screenContextEnabled && (
+                <span className="os-chip truncate">context on</span>
+              )}
+            </div>
+
+            <div className="flex items-center gap-1.5">
+              <button
+                onClick={() => setModelOpen(!isModelOpen)}
+                className="os-chip hover:bg-[var(--os-active)] max-w-[130px]"
+                aria-label="Choose model"
+              >
+                <span className="truncate">{model || 'Select model'}</span>
+                <ChevronDown size={11} className="shrink-0" />
+              </button>
+              <button
+                onClick={() => void send()}
+                disabled={!input.trim() || isLoading}
+                aria-label="Send message"
+                className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 transition-all ${
+                  input.trim() && !isLoading
+                    ? 'bg-[var(--os-accent)] text-white active:scale-95'
+                    : 'bg-[var(--os-hover)] text-[var(--os-text-dim)] cursor-not-allowed'
+                }`}
+              >
+                <ArrowUp size={16} />
+              </button>
             </div>
           </div>
         </div>
       </div>
 
-      {/* Model Selection Dropdown Overlay */}
+      {/* ── Model picker ── */}
       {isModelOpen && (
-        <div className="fixed inset-0 z-[100] flex items-end justify-center pb-24 px-6 pointer-events-none">
-          <div className="fixed inset-0 bg-black/40 backdrop-blur-sm pointer-events-auto" onClick={() => setIsModelOpen(false)} />
-          <div className="w-[320px] glass-morphism rounded-2xl shadow-2xl p-4 animate-in slide-in-from-bottom-4 duration-300 pointer-events-auto border border-white/10">
-            <div className="space-y-4">
-              <div className="flex flex-col gap-3">
-                <label className="text-[9px] font-black uppercase tracking-widest text-white/20 px-1">Engine Provider</label>
-                <div className="flex gap-2">
-                   {dynamicProviders.map(p => (
-                     <button
-                        key={p.slug}
-                        onClick={() => setLlmProvider(p.slug)}
-                        className={`flex-1 p-2 rounded-xl border transition-all flex flex-col items-center gap-1 ${
-                          llmProvider === p.slug ? 'bg-indigo-500/10 border-indigo-400 text-indigo-400' : 'border-white/5 text-white/30'
-                        }`}
-                     >
-                       <span className="text-lg">{p.icon}</span>
-                       <span className="text-[8px] font-bold uppercase tracking-tighter">{p.name}</span>
-                     </button>
-                   ))}
-                </div>
-              </div>
-              <div className="flex flex-col gap-2">
-                <label className="text-[9px] font-black uppercase tracking-widest text-white/20 px-1">Active Model</label>
-                <div className="max-h-[160px] overflow-y-auto custom-scrollbar space-y-1">
-                  {dynamicProviders.find(p => p.slug === llmProvider)?.models.map(m => (
-                    <button
-                      key={m.value}
-                      onClick={() => { setLlmModel(m.value); setIsModelOpen(false); }}
-                      className={`w-full text-left px-3 py-2 rounded-lg text-xs font-bold transition-all ${
-                        llmModel === m.value ? 'bg-indigo-500 text-white' : 'hover:bg-white/5 text-white/40'
-                      }`}
-                    >
-                      {m.name}
-                    </button>
-                  ))}
-                </div>
-              </div>
+        <div className="absolute inset-0 z-50 flex items-end p-3">
+          <div className="absolute inset-0 bg-black/40" onClick={() => setModelOpen(false)} />
+          <div className="os-panel relative w-full p-3 os-anim-rise max-h-[70%] flex flex-col">
+            <p className="os-field-label mb-2">Provider</p>
+            <div className="flex gap-1.5 flex-wrap mb-3">
+              {providers.map((entry) => (
+                <button
+                  key={entry.slug}
+                  onClick={() => {
+                    setProvider(entry.slug);
+                    setModel(entry.models[0]?.value ?? '');
+                  }}
+                  data-active={provider === entry.slug}
+                  className="os-row w-auto flex-none px-2.5 py-1.5 text-[11px] font-semibold gap-1.5"
+                >
+                  <span>{entry.icon}</span>
+                  {entry.name}
+                  {!entry.has_credentials && (
+                    <span className="text-[9px] opacity-50">no key</span>
+                  )}
+                </button>
+              ))}
+              {providers.length === 0 && (
+                <p className="text-[11px] text-[var(--os-text-dim)] px-1">
+                  No providers available. Add credentials in the backend.
+                </p>
+              )}
+            </div>
+
+            <p className="os-field-label mb-2">Model</p>
+            <div className="flex-1 overflow-y-auto space-y-0.5">
+              {activeModel?.models.map((entry) => (
+                <button
+                  key={entry.value}
+                  onClick={() => { setModel(entry.value); setModelOpen(false); }}
+                  data-active={model === entry.value}
+                  className="os-row text-[12px]"
+                >
+                  <span className="flex-1 truncate">{entry.name}</span>
+                  {entry.is_free && <span className="os-chip h-[18px]">free</span>}
+                </button>
+              ))}
             </div>
           </div>
         </div>
       )}
+    </div>
+  );
+}
 
-      {/* Internal History Sidebar Overlay */}
-      <div className={`absolute inset-y-0 right-0 w-full bg-[#0a0a0c] border-l border-white/5 z-40 transition-all duration-500 ease-in-out transform ${
-        showHistory ? 'translate-x-0' : 'translate-x-full'
-      }`}>
-        <div className="h-14 flex items-center justify-between px-6 border-b border-white/[0.03]">
-          <span className="text-[10px] font-black uppercase tracking-[0.2em] text-white/60">Past Sessions</span>
-          <button 
-            onClick={() => setShowHistory(false)}
-            className="p-2 hover:bg-white/5 rounded-xl text-white/20 transition-all"
-          >
-            <X size={16} />
-          </button>
-        </div>
-        <div className="p-6">
-          <button className="w-full py-3 bg-indigo-500/10 border border-indigo-500/20 rounded-xl text-indigo-400 text-xs font-black uppercase tracking-widest hover:bg-indigo-500/20 transition-all flex items-center justify-center gap-2">
-            <Plus size={16} />
-            New Thread
-          </button>
-          <div className="mt-8 flex flex-col items-center justify-center text-white/5 gap-4">
-             <History size={48} strokeWidth={1} />
-             <span className="text-[9px] font-black uppercase tracking-[0.3em]">No Local History</span>
-          </div>
-        </div>
+/** One line of the agent audit trail. */
+function ActionRow({ record, showTime }: { record: AgentActionRecord; showTime?: boolean }) {
+  const ok = record.status === 'ok';
+  return (
+    <div
+      className="flex items-start gap-2 px-2 py-1.5 rounded-lg text-[11px] bg-[var(--os-surface-sunken)] border border-[var(--os-border)]"
+      title={record.message}
+    >
+      <span
+        className="w-1.5 h-1.5 rounded-full mt-1.5 shrink-0"
+        style={{ background: ok ? 'var(--os-success)' : 'var(--os-danger)' }}
+      />
+      <div className="min-w-0 flex-1">
+        <p className="mono font-semibold text-[var(--os-text-muted)] truncate">{record.action}</p>
+        <p className="text-[var(--os-text-dim)] truncate">{record.message}</p>
       </div>
-
-      <style>{`
-        .custom-scrollbar::-webkit-scrollbar {
-          width: 4px;
-        }
-        .custom-scrollbar::-webkit-scrollbar-track {
-          background: transparent;
-        }
-        .custom-scrollbar::-webkit-scrollbar-thumb {
-          background: rgba(255, 255, 255, 0.05);
-          border-radius: 10px;
-        }
-        @keyframes indeterminate-slide {
-          0% { transform: translateX(-100%); }
-          100% { transform: translateX(200%); }
-        }
-        .animate-indeterminate-slide {
-          width: 50%;
-          animation: indeterminate-slide 1.5s infinite linear;
-        }
-      `}</style>
+      {showTime && (
+        <span className="text-[9.5px] text-[var(--os-text-dim)] shrink-0 mt-0.5">
+          {relativeTime(record.at)}
+        </span>
+      )}
     </div>
   );
 }

@@ -1,151 +1,200 @@
-import { Zap, Cpu, Shield, Activity, LogOut, Terminal, Database, Cloud } from 'lucide-react';
-import { useOS } from '../../contexts/OSContext';
-import { useAuth } from '../../contexts/AuthContext';
+/**
+ * Quick settings popover: the toggles and appearance controls people reach for
+ * most, all wired to real state rather than decoration.
+ */
+
+import {
+  Zap, Shield, LogOut, Database, Moon, Sun, Eye, Settings as SettingsIcon,
+  Bot, Grid2x2, Minimize2,
+} from 'lucide-react';
+import { useOSActions, useOSAgent, useOSShell, useOSWindows } from '../../contexts/osState';
+import { useAuth } from '../../contexts/authState';
+import { ACCENTS, WALLPAPERS } from '../../os/theme';
 
 export function QuickSettings() {
-  const { 
-    isQuickSettingsOpen, 
-    isEngineConnected, toggleEngine,
-    isAutoExecuteActive, toggleAutoExecute,
-    isSandboxActive, toggleSandbox,
-    tokenUsage
-  } = useOS();
-  const { logout, user } = useAuth();
+  const { setOverlay, setTheme, toggleEngine, toggleAutoExecute, toggleSandbox, openApp, tileWindows, minimizeAll } = useOSActions();
+  const { windows } = useOSWindows();
+  const { overlay, theme, isEngineConnected, isAutoExecuteActive, isSandboxActive } = useOSShell();
+  const { isAgentConnected, agentLog } = useOSAgent();
+  const { user, logout } = useAuth();
 
-  if (!isQuickSettingsOpen) return null;
+  if (overlay !== 'quickSettings') return null;
+
+  const availableWallpapers = WALLPAPERS.filter(
+    (wallpaper) => wallpaper.mode === theme.mode || wallpaper.mode === 'both',
+  );
 
   return (
-    <div 
-      className="absolute top-10 right-2 w-80 bg-black/60 backdrop-blur-xl border border-white/10 rounded-2xl p-4 shadow-2xl z-[10000] animate-in fade-in zoom-in-95 duration-200"
-      onClick={(e) => e.stopPropagation()}
+    <div
+      className="os-panel absolute top-9 right-2 w-[326px] p-3.5 z-[10000] os-anim-drop"
+      onClick={(event) => event.stopPropagation()}
+      role="dialog"
+      aria-label="Quick settings"
     >
-      {/* User Info / Context */}
-      <div className="flex items-center gap-3 p-2 mb-4 bg-white/5 rounded-xl border border-white/5">
-        <div className="w-10 h-10 bg-gradient-to-br from-indigo-500 via-purple-500 to-pink-500 rounded-full flex items-center justify-center text-white font-bold shadow-lg">
-          {user?.name?.[0].toUpperCase() || 'U'}
-        </div>
+      {/* Identity */}
+      <div className="flex items-center gap-3 p-2.5 mb-3 rounded-xl bg-[var(--os-surface-sunken)] border border-[var(--os-border)]">
+        <span className="w-9 h-9 rounded-full bg-linear-to-br from-indigo-400 via-violet-500 to-fuchsia-500 flex items-center justify-center text-white font-bold text-[14px] shrink-0">
+          {user?.name?.charAt(0).toUpperCase() ?? 'U'}
+        </span>
         <div className="flex-1 min-w-0">
-          <div className="text-sm font-semibold truncate">{user?.name || 'User'}</div>
-          <div className="text-[10px] text-blue-400 font-bold uppercase tracking-wider">Agent Executive</div>
+          <p className="text-[13px] font-semibold truncate text-[var(--os-text)]">{user?.name ?? 'User'}</p>
+          <p className="text-[10.5px] truncate text-[var(--os-text-dim)]">{user?.email ?? 'Signed out'}</p>
         </div>
-        <button 
-          onClick={logout}
-          className="p-2 hover:bg-white/10 rounded-lg transition-colors text-white/40 hover:text-red-400"
-          title="Sign Out"
-        >
-          <LogOut size={16} />
+        <button onClick={logout} className="os-icon-button" aria-label="Sign out" title="Sign out">
+          <LogOut size={15} />
         </button>
       </div>
 
-      {/* Agentic Grid Controls */}
-      <div className="grid grid-cols-2 gap-2 mb-4">
-        <ControlTile 
-          icon={Database} 
-          label="n8n Engine" 
-          active={isEngineConnected} 
+      {/* Agent + engine toggles */}
+      <div className="grid grid-cols-2 gap-2 mb-3.5">
+        <Tile
+          icon={Bot}
+          label="Agent link"
+          detail={isAgentConnected ? 'Connected' : 'Offline'}
+          active={isAgentConnected}
+          onClick={() => openApp('settings', { state: { section: 'agent' } })}
+        />
+        <Tile
+          icon={Database}
+          label="n8n engine"
+          detail={isEngineConnected ? 'Syncing' : 'Disconnected'}
+          active={isEngineConnected}
           onClick={() => toggleEngine()}
-          subLabel={isEngineConnected ? 'Syncing Life' : 'Disconnected'} 
         />
-        <ControlTile 
-          icon={Zap} 
-          label="Auto-Exec" 
-          active={isAutoExecuteActive} 
+        <Tile
+          icon={Zap}
+          label="Auto-exec"
+          detail={isAutoExecuteActive ? 'Autonomous' : 'Ask first'}
+          active={isAutoExecuteActive}
           onClick={() => toggleAutoExecute()}
-          subLabel={isAutoExecuteActive ? 'Autonomous' : 'Manual'} 
         />
-        <ControlTile 
-          icon={Shield} 
-          label="Sandbox" 
-          active={isSandboxActive} 
+        <Tile
+          icon={Shield}
+          label="Sandbox"
+          detail={isSandboxActive ? 'Isolated' : 'Full access'}
+          active={isSandboxActive}
           onClick={() => toggleSandbox()}
-          subLabel={isSandboxActive ? 'Isolated' : 'Deep Access'} 
-        />
-        <ControlTile 
-          icon={Terminal} 
-          label="Agent Status" 
-          subLabel="Listening..." 
         />
       </div>
 
-      {/* Resource Metrics (Essential for AI work) */}
-      <div className="space-y-4 mb-4">
-        <div className="space-y-2">
-          <div className="flex items-center justify-between px-1">
-            <div className="flex items-center gap-1.5 opacity-60">
-              <Activity size={14} />
-              <span className="text-[10px] font-bold uppercase">Token Quota</span>
-            </div>
-            <span className="text-[10px] text-blue-400 font-mono">1.2k / 5k</span>
-          </div>
-          <div className="relative h-2 flex items-center group">
-            <div className="absolute inset-0 bg-white/5 rounded-full" />
-            <div 
-              className="absolute left-0 top-0 bottom-0 bg-blue-500 rounded-full transition-all duration-1000" 
-              style={{ width: `${tokenUsage}%` }}
-            />
-          </div>
-        </div>
-        
-        <div className="space-y-2">
-          <div className="flex items-center justify-between px-1">
-            <div className="flex items-center gap-1.5 opacity-60">
-              <Cpu size={14} />
-              <span className="text-[10px] font-bold uppercase">Inference Load</span>
-            </div>
-            <span className="text-[10px] text-purple-400 font-mono">Low</span>
-          </div>
-          <div className="relative h-2 flex items-center group">
-            <div className="absolute inset-0 bg-white/5 rounded-full" />
-            <div 
-              className="absolute left-0 top-0 bottom-0 bg-purple-500 rounded-full w-1/4" 
-            />
-          </div>
-        </div>
+      {/* Appearance */}
+      <p className="os-field-label mb-2">Appearance</p>
+      <div className="flex items-center gap-2 mb-3">
+        <button
+          onClick={() => setTheme({ mode: theme.mode === 'dark' ? 'light' : 'dark' })}
+          className="os-button flex-1 gap-2"
+          aria-label={`Switch to ${theme.mode === 'dark' ? 'light' : 'dark'} mode`}
+        >
+          {theme.mode === 'dark' ? <Moon size={14} /> : <Sun size={14} />}
+          {theme.mode === 'dark' ? 'Dark' : 'Light'}
+        </button>
+        <button
+          onClick={() => setTheme({ reducedEffects: !theme.reducedEffects })}
+          data-active={theme.reducedEffects}
+          className="os-button gap-2"
+          title="Disable blur and animation for better performance"
+        >
+          <Eye size={14} />
+          {theme.reducedEffects ? 'Plain' : 'Effects'}
+        </button>
       </div>
 
-      {/* Footer Info */}
-      <div className="flex items-center justify-between pt-4 border-t border-white/5 text-[10px] px-1">
-        <div className="flex items-center gap-2 font-medium text-white/30">
-          <Cloud size={14} />
-          <span>Syncing with Better n8n</span>
+      <div className="flex items-center gap-1.5 mb-3">
+        {ACCENTS.map((accent) => (
+          <button
+            key={accent.id}
+            onClick={() => setTheme({ accent: accent.value })}
+            aria-label={`${accent.name} accent`}
+            title={accent.name}
+            className="w-7 h-7 rounded-full transition-transform hover:scale-110"
+            style={{
+              background: accent.value,
+              boxShadow: theme.accent === accent.value
+                ? `0 0 0 2px var(--os-surface-solid), 0 0 0 4px ${accent.value}`
+                : 'none',
+            }}
+          />
+        ))}
+      </div>
+
+      <div className="flex gap-1.5 mb-3.5 overflow-x-auto pb-1">
+        {availableWallpapers.map((wallpaper) => (
+          <button
+            key={wallpaper.id}
+            onClick={() => setTheme({ wallpaper: wallpaper.value })}
+            aria-label={`${wallpaper.name} wallpaper`}
+            title={wallpaper.name}
+            className="w-14 h-9 rounded-lg shrink-0 border transition-transform hover:scale-105"
+            style={{
+              background: wallpaper.value,
+              borderColor: theme.wallpaper === wallpaper.value ? 'var(--os-accent)' : 'var(--os-border)',
+              borderWidth: theme.wallpaper === wallpaper.value ? 2 : 1,
+            }}
+          />
+        ))}
+      </div>
+
+      {/* Window actions */}
+      {windows.length > 0 && (
+        <div className="flex gap-2 mb-3.5">
+          <button onClick={tileWindows} className="os-button flex-1 gap-2" disabled={windows.length < 2}>
+            <Grid2x2 size={14} /> Tile
+          </button>
+          <button onClick={minimizeAll} className="os-button flex-1 gap-2">
+            <Minimize2 size={14} /> Show desktop
+          </button>
         </div>
-        <div className="text-white/20">
-          v0.8.2-alpha
-        </div>
+      )}
+
+      <hr className="os-divider mb-2.5" />
+
+      <div className="flex items-center justify-between">
+        <button
+          onClick={() => { openApp('settings'); setOverlay(null); }}
+          className="os-button os-button--ghost gap-2 px-2"
+        >
+          <SettingsIcon size={14} /> All settings
+        </button>
+        <span className="text-[10px] text-[var(--os-text-dim)]">
+          {agentLog.length} agent action{agentLog.length === 1 ? '' : 's'}
+        </span>
       </div>
     </div>
   );
 }
 
-function ControlTile({ 
-  icon: Icon, 
-  label, 
-  active, 
-  subLabel, 
-  onClick 
-}: { 
-  icon: any, 
-  label: string, 
-  active?: boolean, 
-  subLabel?: string,
-  onClick?: () => void
+function Tile({
+  icon: Icon, label, detail, active, onClick,
+}: {
+  icon: typeof Zap;
+  label: string;
+  detail: string;
+  active?: boolean;
+  onClick?: () => void;
 }) {
   return (
-    <button 
+    <button
       onClick={onClick}
-      className={`flex items-center gap-3 p-2 rounded-xl border transition-all text-left ${
-        active 
-          ? 'bg-blue-500/20 border-blue-500/30 text-blue-100 ring-1 ring-blue-500/20' 
-          : 'bg-white/5 border-white/5 text-white/60 hover:bg-white/10'
-      }`}
+      className="flex items-center gap-2.5 p-2 rounded-xl border transition-all text-left"
+      style={{
+        background: active ? 'rgb(var(--os-accent-rgb) / 0.13)' : 'var(--os-surface-sunken)',
+        borderColor: active ? 'rgb(var(--os-accent-rgb) / 0.3)' : 'var(--os-border)',
+      }}
+      aria-pressed={active}
     >
-      <div className={`p-2 rounded-lg ${active ? 'bg-blue-500 text-white shadow-[0_0_10px_rgba(59,130,246,0.5)]' : 'bg-white/10'}`}>
-        <Icon size={16} />
-      </div>
-      <div className="min-w-0">
-        <div className="text-[11px] font-bold truncate">{label}</div>
-        {subLabel && <div className="text-[9px] opacity-40 truncate">{subLabel}</div>}
-      </div>
+      <span
+        className="w-7 h-7 rounded-lg flex items-center justify-center shrink-0"
+        style={{
+          background: active ? 'var(--os-accent)' : 'var(--os-hover)',
+          color: active ? '#fff' : 'var(--os-text-muted)',
+        }}
+      >
+        <Icon size={14} />
+      </span>
+      <span className="min-w-0">
+        <span className="block text-[11.5px] font-semibold truncate text-[var(--os-text)]">{label}</span>
+        <span className="block text-[9.5px] truncate text-[var(--os-text-dim)]">{detail}</span>
+      </span>
     </button>
   );
 }

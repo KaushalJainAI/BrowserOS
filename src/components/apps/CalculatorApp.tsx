@@ -1,5 +1,6 @@
-import { Divide, X, Minus, Plus, Equal, History, Trash2, ChevronRight, Image as ImageIcon, ArrowRight, ArrowLeft } from 'lucide-react';
+import { Divide, X, Minus, Plus, Equal, History, Trash2, ChevronRight, Image as ImageIcon, ArrowRight, ArrowLeft, type LucideIcon } from 'lucide-react';
 import { useState, useEffect, useCallback } from 'react';
+import { evaluateExpression } from '../../os/formula';
 
 interface HistoryItem {
   expression: string;
@@ -7,7 +8,7 @@ interface HistoryItem {
   time: string;
 }
 
-export function CalculatorApp({ isMaximized }: { isMaximized?: boolean }) {
+export default function CalculatorApp() {
   const [display, setDisplay] = useState('0');
   const [expression, setExpression] = useState('');
   const [history, setHistory] = useState<HistoryItem[]>([]);
@@ -15,20 +16,14 @@ export function CalculatorApp({ isMaximized }: { isMaximized?: boolean }) {
   const [waitingForOperand, setWaitingForOperand] = useState(false);
   const [lastOperator, setLastOperator] = useState<string | null>(null);
 
-  // Auto-show history when maximized
-  useEffect(() => {
-    if (isMaximized) setShowHistory(true);
-  }, [isMaximized]);
-
   const calculate = useCallback((exp: string) => {
-    try {
-      if (!/^[0-9+\-*/.()ePI\s]+$/.test(exp)) return 'Error';
-      const sanitized = exp.replace(/PI/g, Math.PI.toString()).replace(/e/g, Math.E.toString());
-      const result = eval(sanitized);
-      return Number.isFinite(result) ? String(parseFloat(result.toFixed(10))) : 'Error';
-    } catch {
-      return 'Error';
-    }
+    // Parsed, not evaluated: see `evaluateExpression`. The constants are
+    // substituted first because the parser has no notion of named values.
+    const substituted = exp
+      .replace(/PI/g, String(Math.PI))
+      .replace(/(?<![0-9A-Za-z.])e(?![0-9A-Za-z.])/g, String(Math.E));
+    const result = evaluateExpression(substituted);
+    return result === null ? 'Error' : String(parseFloat(result.toFixed(10)));
   }, []);
 
   const handleAction = useCallback((action: string) => {
@@ -298,7 +293,7 @@ function CalcButton({
   label?: string, 
   onClick: () => void, 
   className?: string, 
-  icon?: any,
+  icon?: LucideIcon,
   active?: boolean
 }) {
   return (
